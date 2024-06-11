@@ -836,6 +836,32 @@ impl ChainQuery {
             .map(|entry| *entry.hash())
     }
 
+    pub fn height_by_timestamp(&self, timestamp: u32, max_step: usize) -> Option<usize> {
+        let indexer = self.store
+            .indexed_headers
+            .read()
+            .unwrap();
+        let mut index = indexer.len() - 1;
+        let mut step = 1;
+        loop {
+            if step > max_step {
+                return None;
+            }
+            if let Some(header) = indexer.header_by_height(index) {
+                if header.header().time <= timestamp {
+                    return Some(header.height())
+                }
+            } else {
+                return None;
+            }
+            step += 1;
+            if index < 1 {
+                return None;
+            }
+            index -= 1;
+        }
+    }
+
     pub fn blockid_by_height(&self, height: usize) -> Option<BlockId> {
         self.store
             .indexed_headers
