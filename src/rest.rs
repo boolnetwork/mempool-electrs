@@ -867,7 +867,7 @@ fn handle_request(
             None,
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
-            let specific_height = usize::from_str(height_str).unwrap_or_default();
+            let specific_height = usize::from_str(height_str).map_err(|_|HttpError::from(format!("Invalid block height {height_str}")))?;
             let stats = query.stats_specific_height(&script_hash[..], specific_height);
             json_response(
                 json!({
