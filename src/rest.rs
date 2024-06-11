@@ -710,7 +710,7 @@ fn handle_request(
             TTL_SHORT,
         ),
 
-        (&Method::GET, Some(&"blocks"), Some(&"timestamp"), Some(timestamp), Some(max_step), None) => {
+        (&Method::GET, Some(&"blocks"), Some(&"timestamp"), Some(timestamp), Some(&"limit"), Some(max_step)) => {
             let timestamp = timestamp.parse::<u32>()?;
             let max_step = max_step.parse::<usize>()?;
             let height = query
