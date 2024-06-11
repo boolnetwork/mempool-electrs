@@ -725,7 +725,8 @@ impl ChainQuery {
 
     pub fn stats_limit_height(&self, scripthash: &[u8], specific_height: usize) -> ScriptStats {
         let _timer = self.start_timer("stats");
-        let (newstats, _lastblock) = self.stats_delta_special_height(scripthash, ScriptStats::default(), specific_height);
+        let (newstats, _lastblock) =
+            self.stats_delta_special_height(scripthash, ScriptStats::default(), specific_height);
         newstats
     }
 
@@ -803,16 +804,20 @@ impl ChainQuery {
         special_height: usize,
     ) -> (ScriptStats, Option<BlockHash>) {
         let _timer = self.start_timer("stats_delta_special_height"); // TODO: measure also the number of txns processed.
-        let history_iter = self.history_iter_scan(b'H', scripthash, 0)
+        let history_iter = self
+            .history_iter_scan(b'H', scripthash, 0)
             .map(TxHistoryRow::from_row)
-            .filter(|history|history.key.confirmed_height as usize <= special_height)
+            .filter(|history| history.key.confirmed_height as usize <= special_height)
             .filter_map(|history| {
                 self.tx_confirming_block(&history.get_txid())
                     // drop history entries that were previously confirmed in a re-orged block and later
                     // confirmed again at a different height
-                    .filter(|blockid| blockid.height == history.key.confirmed_height as usize as usize)
+                    .filter(|blockid| {
+                        blockid.height == history.key.confirmed_height as usize
+                    })
                     .map(|blockid| (history, blockid))
-            }).collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
 
         let mut stats = init_stats;
         let mut seen_txids = HashSet::new();

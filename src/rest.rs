@@ -32,6 +32,7 @@ use {
     },
 };
 
+use ordinals::{Artifact, RuneId, Runestone};
 use serde::Serialize;
 use serde_json;
 use std::collections::HashMap;
@@ -39,7 +40,6 @@ use std::num::ParseIntError;
 use std::os::unix::fs::FileTypeExt;
 use std::sync::Arc;
 use std::thread;
-use ordinals::{Artifact, RuneId, Runestone};
 use url::form_urlencoded;
 
 const ADDRESS_SEARCH_LIMIT: usize = 10;
@@ -867,7 +867,8 @@ fn handle_request(
             None,
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
-            let specific_height = usize::from_str(height_str).map_err(|_|HttpError::from(format!("Invalid block height {height_str}")))?;
+            let specific_height = usize::from_str(height_str)
+                .map_err(|_| HttpError::from(format!("Invalid block height {height_str}")))?;
             let stats = query.stats_specific_height(&script_hash[..], specific_height);
             json_response(
                 json!({
@@ -1075,15 +1076,12 @@ fn handle_request(
                     true
                 }
             };
-            utxos.retain(|utxo| {
-                utxo.value >= min_amount && filter_confirmed(utxo, confirmed)
-            });
+            utxos.retain(|utxo| utxo.value >= min_amount && filter_confirmed(utxo, confirmed));
             utxos.sort_by(|a, b| a.value.partial_cmp(&b.value).unwrap());
 
             let mut choose_list = Vec::new();
             for target_amount in amounts {
-                let (mut part_choose_list, part_index) =
-                    select_utxos(&utxos, target_amount);
+                let (mut part_choose_list, part_index) = select_utxos(&utxos, target_amount);
                 for (iter_index, selcet_index) in part_index.iter().enumerate() {
                     utxos.remove(selcet_index - iter_index);
                 }
@@ -1094,14 +1092,7 @@ fn handle_request(
             json_response(choose_list, TTL_SHORT)
         }
 
-        (
-            &Method::POST,
-            Some(&"runes_extra_data"),
-            None,
-            None,
-            None,
-            None,
-        ) => {
+        (&Method::POST, Some(&"runes_extra_data"), None, None, None, None) => {
             let (tx_hash, is_deposit): (String, bool) =
                 serde_json::from_slice(&body).map_err(|err| HttpError::from(err.to_string()))?;
 
@@ -1109,8 +1100,8 @@ fn handle_request(
             let rawtx = query
                 .lookup_raw_txn(&hash)
                 .ok_or_else(|| HttpError::not_found("Transaction not found".to_string()))?;
-            let tx: bitcoin_new::Transaction =
-                bitcoin_new::consensus::deserialize(&rawtx).map_err(|e| HttpError::from(e.to_string()))?;
+            let tx: bitcoin_new::Transaction = bitcoin_new::consensus::deserialize(&rawtx)
+                .map_err(|e| HttpError::from(e.to_string()))?;
             let op_return = parse_cross_data_from_op_return(&tx, is_deposit)?;
             http_message(StatusCode::OK, op_return.to_hex(), 0)
         }
@@ -1721,7 +1712,8 @@ fn parse_cross_data_from_op_return(
     tx: &bitcoin_new::Transaction,
     is_deposit: bool,
 ) -> Result<Vec<u8>, HttpError> {
-    let res = Runestone::decipher(&tx).ok_or(HttpError::from("decipher Runestone failed".to_string()))?;
+    let res =
+        Runestone::decipher(&tx).ok_or(HttpError::from("decipher Runestone failed".to_string()))?;
     if let Artifact::Runestone(runestone) = res {
         let custom_edicts: Vec<_> = runestone
             .edicts
@@ -1730,7 +1722,10 @@ fn parse_cross_data_from_op_return(
             .collect();
         if is_deposit {
             if custom_edicts.len() != 3 {
-                return Err(HttpError::from(format!("Invalid deposit edicts length: {:?}, expect 3", custom_edicts.len())));
+                return Err(HttpError::from(format!(
+                    "Invalid deposit edicts length: {:?}, expect 3",
+                    custom_edicts.len()
+                )));
             }
             let part_data: Vec<Vec<u8>> = custom_edicts
                 .iter()
@@ -1739,7 +1734,10 @@ fn parse_cross_data_from_op_return(
             Ok(part_data.concat().to_vec())
         } else {
             if custom_edicts.len() != 2 {
-                return Err(HttpError::from(format!("Invalid withdraw edicts length: {:?}, expect 2", custom_edicts.len())));
+                return Err(HttpError::from(format!(
+                    "Invalid withdraw edicts length: {:?}, expect 2",
+                    custom_edicts.len()
+                )));
             }
             let uid1 = custom_edicts[0].amount.to_be_bytes();
             let uid2 = custom_edicts[1].amount.to_be_bytes();
@@ -1894,10 +1892,10 @@ fn select_utxos(utxos: &[UtxoValue], target_value: u64) -> (Vec<UtxoValue>, Vec<
 
 #[cfg(test)]
 mod tests {
-    use crate::rest::{HttpError, select_utxos, UtxoValue};
+    use crate::rest::{select_utxos, HttpError, UtxoValue};
+    use crate::util::TransactionStatus;
     use serde_json::Value;
     use std::collections::HashMap;
-    use crate::util::TransactionStatus;
 
     #[test]
     fn test_parse_query_param() {
@@ -2094,11 +2092,18 @@ mod tests {
                 confirmed: false,
                 block_height: None,
                 block_hash: None,
-                block_time: None
+                block_time: None,
             },
             value: 0,
         };
-        let mut utxos = [default_value.clone(), default_value.clone(), default_value.clone(), default_value.clone(), default_value].to_vec();
+        let mut utxos = [
+            default_value.clone(),
+            default_value.clone(),
+            default_value.clone(),
+            default_value.clone(),
+            default_value,
+        ]
+        .to_vec();
         utxos[0].value = 1000;
         utxos[1].value = 1000;
         utxos[2].value = 1000;
