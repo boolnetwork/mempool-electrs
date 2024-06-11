@@ -505,6 +505,7 @@ impl ChainQuery {
             &TxHistoryRow::prefix_height(code, hash, start_height as u32),
         )
     }
+
     fn history_iter_scan_reverse(&self, code: u8, hash: &[u8]) -> ReverseScanIterator {
         self.store.history_db.iter_scan_reverse(
             &TxHistoryRow::filter(code, hash),
@@ -722,6 +723,13 @@ impl ChainQuery {
         newstats
     }
 
+    pub fn stats_limit_height(&self, scripthash: &[u8], specific_height: usize) -> ScriptStats {
+        let _timer = self.start_timer("stats");
+        let (newstats, _lastblock) =
+            self.stats_delta_special_height(scripthash, ScriptStats::default(), specific_height);
+        newstats
+    }
+
     fn stats_delta(
         &self,
         scripthash: &[u8],
@@ -739,6 +747,77 @@ impl ChainQuery {
                     .filter(|blockid| blockid.height == history.key.confirmed_height as usize)
                     .map(|blockid| (history, blockid))
             });
+
+        let mut stats = init_stats;
+        let mut seen_txids = HashSet::new();
+        let mut lastblock = None;
+
+        for (history, blockid) in history_iter {
+            if lastblock != Some(blockid.hash) {
+                seen_txids.clear();
+            }
+
+            if seen_txids.insert(history.get_txid()) {
+                stats.tx_count += 1;
+            }
+
+            match history.key.txinfo {
+                #[cfg(not(feature = "liquid"))]
+                TxHistoryInfo::Funding(ref info) => {
+                    stats.funded_txo_count += 1;
+                    stats.funded_txo_sum += info.value;
+                }
+
+                #[cfg(not(feature = "liquid"))]
+                TxHistoryInfo::Spending(ref info) => {
+                    stats.spent_txo_count += 1;
+                    stats.spent_txo_sum += info.value;
+                }
+
+                #[cfg(feature = "liquid")]
+                TxHistoryInfo::Funding(_) => {
+                    stats.funded_txo_count += 1;
+                }
+
+                #[cfg(feature = "liquid")]
+                TxHistoryInfo::Spending(_) => {
+                    stats.spent_txo_count += 1;
+                }
+
+                #[cfg(feature = "liquid")]
+                TxHistoryInfo::Issuing(_)
+                | TxHistoryInfo::Burning(_)
+                | TxHistoryInfo::Pegin(_)
+                | TxHistoryInfo::Pegout(_) => unreachable!(),
+            }
+
+            lastblock = Some(blockid.hash);
+        }
+
+        (stats, lastblock)
+    }
+
+    fn stats_delta_special_height(
+        &self,
+        scripthash: &[u8],
+        init_stats: ScriptStats,
+        special_height: usize,
+    ) -> (ScriptStats, Option<BlockHash>) {
+        let _timer = self.start_timer("stats_delta_special_height"); // TODO: measure also the number of txns processed.
+        let history_iter = self
+            .history_iter_scan(b'H', scripthash, 0)
+            .map(TxHistoryRow::from_row)
+            .filter(|history| history.key.confirmed_height as usize <= special_height)
+            .filter_map(|history| {
+                self.tx_confirming_block(&history.get_txid())
+                    // drop history entries that were previously confirmed in a re-orged block and later
+                    // confirmed again at a different height
+                    .filter(|blockid| {
+                        blockid.height == history.key.confirmed_height as usize
+                    })
+                    .map(|blockid| (history, blockid))
+            })
+            .collect::<Vec<_>>();
 
         let mut stats = init_stats;
         let mut seen_txids = HashSet::new();
