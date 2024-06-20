@@ -60,7 +60,10 @@ pub const LIQUID_TESTNET_PARAMS: address::AddressParams = address::AddressParams
 impl Network {
     #[cfg(not(feature = "liquid"))]
     pub fn magic(self) -> u32 {
-        BNetwork::from(self).magic()
+        match self {
+            Network::Testnet4 => 0x283f161c,
+            _ => BNetwork::from(self).magic()
+        }
     }
 
     #[cfg(feature = "liquid")]
