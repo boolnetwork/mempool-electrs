@@ -1,0 +1,4 @@
+[submodule "sgx-bool-registration-tool"]
+	path = sgx-bool-registration-tool
+	url = https://github.com/ABMatrix/sgx-bool-registration-tool
+	branch = submodule
