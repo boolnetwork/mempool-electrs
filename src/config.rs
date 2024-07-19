@@ -62,6 +62,12 @@ pub struct Config {
     pub rest_max_mempool_page_size: usize,
     pub rest_max_mempool_txid_page_size: usize,
 
+    pub subclient_url: String,
+    pub warn_time: u16,
+    pub config_version: u16,
+    pub device_owner: String,
+    pub sgx_enable: bool,
+
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
     #[cfg(feature = "liquid")]
@@ -262,7 +268,31 @@ impl Config {
                     .long("electrum-banner")
                     .help("Welcome banner for the Electrum server, shown in the console to clients.")
                     .takes_value(true)
-            );
+            ).arg(
+                Arg::with_name("subclient_url")
+                    .long("subclient-url")
+                    .help("register to bool")
+                    .default_value("ws://192.168.200.12:9944")
+            ).arg(
+                Arg::with_name("warn_time")
+                    .long("warn-time")
+                    .help("warn time")
+                    .default_value("20")
+            ).arg(
+                Arg::with_name("config_version")
+                    .long("config-version")
+                    .help("useless")
+                    .default_value("16")
+            ).arg(
+                Arg::with_name("device_owner")
+                    .long("device-owner")
+                    .help("device_owner")
+                    .default_value("0x1234")
+            ).arg(
+                Arg::with_name("sgx_enable")
+                    .long("sgx-enable")
+                    .help("enable sgx and register to bool network")
+                    .takes_value(false));
 
         #[cfg(unix)]
         let args = args.arg(
@@ -476,6 +506,10 @@ impl Config {
             stderrlog::Timestamp::Off
         });
         log.init().expect("logging initialization failed");
+
+        let subclient_url = m.value_of("subclient_url").expect("subclient_url");
+        let device_owner = m.value_of("device_owner").expect("device_owner");
+
         let config = Config {
             log,
             network_type,
@@ -534,6 +568,12 @@ impl Config {
                     .exit(),
                 },
             ),
+            
+            subclient_url: subclient_url.to_string(),
+            warn_time: value_t_or_exit!(m, "warn_time", u16),
+            config_version: value_t_or_exit!(m, "config_version", u16),
+            device_owner: device_owner.to_string(),
+            sgx_enable: m.is_present("sgx_enable"),
 
             #[cfg(feature = "liquid")]
             parent_network,

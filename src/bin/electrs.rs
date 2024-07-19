@@ -145,8 +145,29 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     Ok(())
 }
 
+fn register_to_bool(config: Arc<Config>)  -> Result<()>{
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    if config.sgx_enable {
+        rt.block_on(async{
+            sgx_bool_registration_tool::register_sgx_2(config.subclient_url.clone(), 
+                config.warn_time.into(), config.config_version, config.device_owner.clone()).await
+        }).map_err(|e| format!("register error: {e:?}"))?;
+    } else {
+        rt.block_on(async{
+            sgx_bool_registration_tool::register_sgx_test().await;
+        });
+    }
+
+    Ok(())
+}
+
 fn main() {
     let config = Arc::new(Config::from_args());
+    if let Err(e) = register_to_bool(config.clone()) {
+        error!("register failed: {}", e.display_chain());
+        process::exit(1);
+    }
     if let Err(e) = run_server(config) {
         error!("server failed: {}", e.display_chain());
         process::exit(1);
