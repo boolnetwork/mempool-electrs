@@ -36,6 +36,8 @@ pub enum Network {
     #[cfg(not(feature = "liquid"))]
     Testnet4,
     #[cfg(not(feature = "liquid"))]
+    Fractal,
+    #[cfg(not(feature = "liquid"))]
     Regtest,
     #[cfg(not(feature = "liquid"))]
     Signet,
@@ -61,7 +63,8 @@ impl Network {
     #[cfg(not(feature = "liquid"))]
     pub fn magic(self) -> u32 {
         match self {
-            Network::Testnet4 => 0x283f161c,
+            // hexdump -C -n 293 blk00000.dat [0x1C, 0x16, 0x3F, 0x28]
+            Network::Testnet4 => 0x283F161C,
             _ => BNetwork::from(self).magic()
         }
     }
@@ -146,6 +149,10 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
             "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043"
         )
         .unwrap();
+        static ref FRACTAL_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        )
+        .unwrap();
         static ref REGTEST_GENESIS: bitcoin::BlockHash =
             genesis_block(BNetwork::Regtest).block_hash();
         static ref SIGNET_GENESIS: bitcoin::BlockHash =
@@ -156,6 +163,7 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
         Network::Bitcoin => *BITCOIN_GENESIS,
         Network::Testnet => *TESTNET_GENESIS,
         Network::Testnet4 => *TESTNET4_GENESIS,
+        Network::Fractal => *FRACTAL_GENESIS,
         Network::Regtest => *REGTEST_GENESIS,
         Network::Signet => *SIGNET_GENESIS,
     }
@@ -195,6 +203,8 @@ impl From<&str> for Network {
             #[cfg(not(feature = "liquid"))]
             "testnet4" => Network::Testnet4,
             #[cfg(not(feature = "liquid"))]
+            "fractal" => Network::Fractal,
+            #[cfg(not(feature = "liquid"))]
             "regtest" => Network::Regtest,
             #[cfg(not(feature = "liquid"))]
             "signet" => Network::Signet,
@@ -218,6 +228,7 @@ impl From<Network> for BNetwork {
             Network::Bitcoin => BNetwork::Bitcoin,
             Network::Testnet => BNetwork::Testnet,
             Network::Testnet4 => BNetwork::Testnet,
+            Network::Fractal => BNetwork::Bitcoin,
             Network::Regtest => BNetwork::Regtest,
             Network::Signet => BNetwork::Signet,
         }
