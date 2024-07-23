@@ -65,7 +65,7 @@ impl Network {
         match self {
             // hexdump -C -n 293 blk00000.dat [0x1C, 0x16, 0x3F, 0x28]
             Network::Testnet4 => 0x283F161C,
-            _ => BNetwork::from(self).magic()
+            _ => BNetwork::from(self).magic(),
         }
     }
 
