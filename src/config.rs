@@ -478,7 +478,7 @@ impl Config {
             #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => daemon_dir.push("testnet4"),
             #[cfg(not(feature = "liquid"))]
-            Network::Fractal => daemon_dir.push("fractal"),
+            Network::Fractal => (),
             #[cfg(not(feature = "liquid"))]
             Network::Regtest => daemon_dir.push("regtest"),
             #[cfg(not(feature = "liquid"))]

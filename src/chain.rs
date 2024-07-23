@@ -119,6 +119,8 @@ impl Network {
         return vec![
             "mainnet".to_string(),
             "testnet".to_string(),
+            "testnet4".to_string(),
+            "fractal".to_string(),
             "regtest".to_string(),
             "signet".to_string(),
         ];
