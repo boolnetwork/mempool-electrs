@@ -1774,7 +1774,7 @@ fn address_to_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpE
     #[cfg(not(feature = "liquid"))]
     let is_expected_net = {
         let addr_network = Network::from(addr.network);
-
+        debug!("{} network: {:?}", addr, addr_network);
         // Testnet, Regtest and Signet all share the same version bytes,
         // `addr_network` will be detected as Testnet for all of them.
         addr_network == network
@@ -1783,6 +1783,7 @@ fn address_to_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpE
                     network,
                     Network::Regtest | Network::Signet | Network::Testnet4
                 ))
+        || (addr_network == Network::Bitcoin && network.eq(&Network::Fractal))
     };
 
     #[cfg(feature = "liquid")]
