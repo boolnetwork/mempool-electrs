@@ -710,15 +710,24 @@ fn handle_request(
             TTL_SHORT,
         ),
 
-        (&Method::GET, Some(&"blocks"), Some(&"timestamp"), Some(timestamp), Some(&"limit"), Some(max_step)) => {
+        (
+            &Method::GET,
+            Some(&"blocks"),
+            Some(&"timestamp"),
+            Some(timestamp),
+            Some(&"limit"),
+            Some(max_step),
+        ) => {
             let timestamp = timestamp.parse::<u32>()?;
             let max_step = max_step.parse::<usize>()?;
             let height = query
                 .chain()
                 .height_by_timestamp(timestamp, max_step)
-                .ok_or_else(|| HttpError::not_found("Height not found or exceed max step".to_string()))?;
+                .ok_or_else(|| {
+                    HttpError::not_found("Height not found or exceed max step".to_string())
+                })?;
             http_message(StatusCode::OK, height.to_string(), TTL_SHORT)
-        },
+        }
 
         (&Method::GET, Some(&"blocks"), start_height, None, None, None) => {
             let start_height = start_height.and_then(|height| height.parse::<usize>().ok());
