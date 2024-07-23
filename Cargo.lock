@@ -4577,6 +4577,8 @@ dependencies = [
  "occlum-ra",
  "pallets-api",
  "ringvrf",
+ "serde",
+ "serde_json",
  "sha3 0.8.2",
  "tokio",
  "tracing",
