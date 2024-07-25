@@ -379,6 +379,11 @@ impl Daemon {
             .with_label_values(&[method, "send"])
             .observe(request.len() as f64);
         let response = conn.recv()?;
+
+        let response = 
+        sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
+        .map_err(|e| format!("{e:?}"))?;
+    
         let result: Value = from_str(&response).chain_err(|| "invalid JSON")?;
         timer.observe_duration();
         self.size
