@@ -85,11 +85,20 @@ fn bitcoind_fetcher(
                 let block_entries: Vec<BlockEntry> = blocks
                     .into_iter()
                     .zip(entries)
-                    .map(|(block, entry)| BlockEntry {
+                    .map(|(block, entry)| {
+                    
+                        let txhashroot = block.compute_merkle_root()
+                        .expect(&format!("failed to compute root of txs of block {}",block.block_hash()));
+                        
+                        let sgx_txhashroot = entry.header().merkle_root;
+                        
+                        assert_eq!(txhashroot, sgx_txhashroot, "Block tx hash root not match.");
+                    
+                    BlockEntry {
                         entry: entry.clone(), // TODO: remove this clone()
                         size: block.size() as u32,
                         block,
-                    })
+                    }})
                     .collect();
                 assert_eq!(block_entries.len(), entries.len());
                 sender
