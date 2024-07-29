@@ -28,6 +28,7 @@ pub mod new_index;
 pub mod rest;
 pub mod signal;
 pub mod util;
+pub mod reg;
 
 #[cfg(feature = "liquid")]
 pub mod elements;
