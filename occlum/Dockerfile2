@@ -1,0 +1,42 @@
+FROM occlum/occlum:0.30.1-rt-ubuntu20.04 as base
+
+ENV APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+RUN apt-get update && DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends gnupg wget ca-certificates jq && \
+    apt-get install curl binutils m4 make -y
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+
+FROM occlum/occlum:0.30.1-ubuntu20.04 as packager
+WORKDIR /RUST    
+RUN apt update && apt install -y clang
+ENV RUSTUP_DIST_SERVER="https://mirrors.ustc.edu.cn/rust-static"
+ENV RUSTUP_UPDATE_ROOT="https://mirrors.ustc.edu.cn/rust-static/rustup"
+RUN rustup install nightly-2024-06-27-x86_64-unknown-linux-gnu && \
+    rustup default nightly-2024-06-27-x86_64-unknown-linux-gnu && \
+    rustup target add x86_64-unknown-linux-musl
+COPY ./sgx-bool-registration-tool ./node/sgx-bool-registration-tool	
+COPY ./src ./node/src
+COPY ./Cargo.lock ./node/Cargo.lock
+COPY ./Cargo.toml ./node/Cargo.toml
+WORKDIR /RUST/node
+RUN git config --system core.longpaths true
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+RUN cargo build --release
+COPY ./occlum/sgx_default_qcnl.conf ./occlum/sgx_default_qcnl.conf
+COPY ./occlum/occlum_build.sh ./occlum_build.sh
+RUN chmod +x ./occlum_build.sh && \
+    ./occlum_build.sh && \
+    cd occlum_instance &&\
+    occlum package
+
+FROM base as deployer
+WORKDIR /root
+COPY --from=packager /RUST/occlum/occlum_instance/occlum_instance.tar.gz .
+RUN tar -xvzf occlum_instance.tar.gz
+RUN rm occlum_instance.tar.gz
+COPY --from=packager /etc/sgx_default_qcnl.conf /etc
+RUN    mkdir -p /var/run/aesmd && \
+    echo "LD_LIBRARY_PATH=/opt/intel/sgx-aesm-service/aesm nohup /opt/intel/sgx-aesm-service/aesm/aesm_service --no-daemon >/dev/null 2>&1 &" > /root/.bashrc
+
+WORKDIR /root
