@@ -110,6 +110,7 @@ struct Connection {
     die_please: Option<Receiver<()>>,
     #[cfg(feature = "electrum-discovery")]
     discovery: Option<Arc<DiscoveryManager>>,
+    config: Arc<Config>,
 }
 
 impl Connection {
@@ -119,6 +120,7 @@ impl Connection {
         stats: Arc<Stats>,
         txs_limit: usize,
         die_please: Receiver<()>,
+        config:  Arc<Config>,
         #[cfg(feature = "electrum-discovery")] discovery: Option<Arc<DiscoveryManager>>,
     ) -> Connection {
         Connection {
@@ -132,6 +134,7 @@ impl Connection {
             die_please: Some(die_please),
             #[cfg(feature = "electrum-discovery")]
             discovery,
+            config
         }
     }
 
@@ -504,6 +507,9 @@ impl Connection {
 
     fn send_values(&mut self, values: &[Value]) -> Result<()> {
         for value in values {
+
+            let value = crate::reg::create_sgx_response(value, self.config.sgx_enable);
+
             let line = value.to_string() + "\n";
             self.stream
                 .write_all(line.as_bytes())
@@ -779,7 +785,7 @@ impl RPC {
 
                 let acceptor_shutdown = Channel::unbounded();
                 let acceptor_shutdown_sender = acceptor_shutdown.sender();
-                let acceptor = RPC::start_acceptor(config, acceptor_shutdown);
+                let acceptor = RPC::start_acceptor(config.clone(), acceptor_shutdown);
                 RPC::start_notifier(
                     notification,
                     senders.clone(),
@@ -805,6 +811,7 @@ impl RPC {
                     #[cfg(feature = "electrum-discovery")]
                     let discovery = discovery.clone();
 
+                    let config = config.clone();
                     let spawned = spawn_thread("peer", move || {
                         let addr = stream.addr_string();
                         info!("[{}] connected peer", addr);
@@ -816,6 +823,7 @@ impl RPC {
                             peace_receiver,
                             #[cfg(feature = "electrum-discovery")]
                             discovery,
+                            config
                         );
                         senders.lock().unwrap().push(conn.chan.sender());
                         conn.run();

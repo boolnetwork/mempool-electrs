@@ -1615,16 +1615,7 @@ where
 fn json_response<T: Serialize>(value: T, ttl: u32, sgx: bool) -> Result<Response<Body>, HttpError> {
     //let value = serde_json::to_string(&value)?;
 
-    let keytype = if  sgx {
-        sgx_bool_registration_tool::KeyType::SGX
-    } else {
-        sgx_bool_registration_tool::KeyType::TEST
-    };
-
-    let value = sgx_bool_registration_tool::create_sgx_response_v2(
-        value,
-        keytype,
-    );
+    let value = crate::reg::create_sgx_response(value, sgx);
 
     Ok(Response::builder()
         .header("Content-Type", "application/json")

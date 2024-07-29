@@ -87,12 +87,7 @@ fn bitcoind_fetcher(
                     .zip(entries)
                     .map(|(block, entry)| {
                     
-                        let txhashroot = block.compute_merkle_root()
-                        .expect(&format!("failed to compute root of txs of block {}",block.block_hash()));
-                        
-                        let sgx_txhashroot = entry.header().merkle_root;
-                        
-                        assert_eq!(txhashroot, sgx_txhashroot, "Block tx hash root not match.");
+                        crate::reg::validate_tx_root(&block, entry);
                     
                     BlockEntry {
                         entry: entry.clone(), // TODO: remove this clone()
@@ -132,12 +127,7 @@ fn blkfiles_fetcher(
                     .filter_map(|(block, size)| {
                         let blockhash = block.block_hash();
 
-                        let txhashroot = block.compute_merkle_root()
-                        .expect(&format!("failed to compute root of txs of block {}",block.block_hash()));
-                        
-                        let sgx_txhashroot = entry_map[&blockhash].header().merkle_root;
-                        
-                        assert_eq!(txhashroot, sgx_txhashroot, "Block tx hash root not match.");
+                        crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
 
                         entry_map
                             .remove(&blockhash)

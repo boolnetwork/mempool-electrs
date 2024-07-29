@@ -464,19 +464,10 @@ impl Daemon {
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
 
-        info!("method {}",method);
-        if method == "getnetworkinfo" {
-            return Ok(json!(
-                {"version":270000,
-                "subversion":"/Satoshi:27.0.0/",
-                "relayfee":0.00001000,}
-            ));
-        }
-
-        if method == "getmempoolinfo" {
-            return Ok(json!(
-                {"loaded":true}
-            ));
+        trace!("method {}",method);
+        let filter = crate::reg::filter_requests(method);
+        if filter.is_some() {
+            return Ok(filter.unwrap());
         }
 
         let mut values = self.retry_request_batch(method, &[params], 0.0)?;
