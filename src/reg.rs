@@ -16,7 +16,6 @@ pub fn validate_tx_root(block: &Block, entry: &HeaderEntry){
 }
 
 pub fn filter_requests(method: &str) -> Option<Value>{
-    info!("method {}",method);
     if method == "getnetworkinfo" {
         return Some(json!(
             {"version":270000,

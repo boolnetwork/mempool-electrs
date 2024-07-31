@@ -1592,16 +1592,7 @@ fn http_message<T>(status: StatusCode, message: T, ttl: u32, sgx: bool) -> Resul
 where
     T: Serialize,
 {
-    let keytype = if  sgx {
-        sgx_bool_registration_tool::KeyType::SGX
-    } else {
-        sgx_bool_registration_tool::KeyType::TEST
-    };
-
-    let value = sgx_bool_registration_tool::create_sgx_response_v2(
-        message,
-        keytype,
-    );
+    let value = crate::reg::create_sgx_response(message, sgx);
 
     Ok(Response::builder()
         .status(status)
