@@ -44,6 +44,14 @@ fn header_from_value(value: Value) -> Result<BlockHeader> {
     deserialize(&header_bytes).chain_err(|| format!("failed to parse header {}", header_hex))
 }
 
+#[test]
+fn test_header_from_value() {
+    let header_hex = "040000207ec7260b4a9f319cbca263d96e031ea83b135c47fb81c49a021585000000000054a277c048b6e788c79e7813e9533e9e3a39e0f6c60a7411572ec9cced160298f782ab66815c061c2a81bd9d";
+    let header_bytes = hex::decode(header_hex).unwrap();
+    let header = deserialize::<BlockHeader>(&header_bytes).chain_err(|| format!("failed to parse header {}", header_hex)).unwrap();
+    println!("{:?}", header);
+}
+
 fn block_from_value(value: Value) -> Result<Block> {
     let block_hex = value.as_str().chain_err(|| "non-string block")?;
     let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
@@ -521,13 +529,15 @@ impl Daemon {
 
     pub fn getblockheaders(&self, heights: &[usize]) -> Result<Vec<BlockHeader>> {
         let heights: Vec<Value> = heights.iter().map(|height| json!([height])).collect();
+        trace!("getblockheaders heights: {:?}", heights);
         let params_list: Vec<Value> = self
             .requests("getblockhash", &heights)?
             .into_iter()
             .map(|hash| json!([hash, /*verbose=*/ false]))
             .collect();
         let mut result = vec![];
-        for h in self.requests("getblockheader", &params_list)? {
+        for (idx,h) in self.requests("getblockheader", &params_list)?.into_iter().enumerate() {
+            trace!("getblockheader {}", heights[idx]);
             result.push(header_from_value(h)?);
         }
         Ok(result)
