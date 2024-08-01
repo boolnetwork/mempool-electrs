@@ -65,6 +65,7 @@ impl Network {
         match self {
             // hexdump -C -n 293 blk00000.dat [0x1C, 0x16, 0x3F, 0x28]
             Network::Testnet4 => 0x283F161C,
+            Network::Fractal => 0xE8ADA3C8,
             _ => BNetwork::from(self).magic(),
         }
     }
@@ -230,7 +231,6 @@ impl From<Network> for BNetwork {
             Network::Bitcoin => BNetwork::Bitcoin,
             Network::Testnet => BNetwork::Testnet,
             Network::Testnet4 => BNetwork::Testnet,
-            Network::Fractal => BNetwork::Bitcoin,
             Network::Regtest => BNetwork::Regtest,
             Network::Signet => BNetwork::Signet,
         }
