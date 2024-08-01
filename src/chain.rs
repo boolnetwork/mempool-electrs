@@ -152,10 +152,8 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
             "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043"
         )
         .unwrap();
-        static ref FRACTAL_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
-            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
-        )
-        .unwrap();
+        static ref FRACTAL_GENESIS: bitcoin::BlockHash =
+            genesis_block(BNetwork::Bitcoin).block_hash();
         static ref REGTEST_GENESIS: bitcoin::BlockHash =
             genesis_block(BNetwork::Regtest).block_hash();
         static ref SIGNET_GENESIS: bitcoin::BlockHash =
