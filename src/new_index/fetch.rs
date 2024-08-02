@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::thread;
 
 use crate::chain::{Block, BlockHash};
+use crate::chain::Network::Fractal;
 use crate::daemon::Daemon;
 use crate::errors::*;
 use crate::util::{spawn_thread, HeaderEntry, SyncChannel};
@@ -113,7 +114,12 @@ fn blkfiles_fetcher(
     let mut entry_map: HashMap<BlockHash, HeaderEntry> =
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
-    let parser = blkfiles_parser(blkfiles_reader(blk_files), magic);
+    let parser = if daemon.network().eq(&Fractal) {
+        blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
+    }else {
+        blkfiles_parser(blkfiles_reader(blk_files), magic)
+    };
+
     Ok(Fetcher::from(
         chan.into_receiver(),
         spawn_thread("blkfiles_fetcher", move || {
@@ -183,6 +189,24 @@ fn blkfiles_parser(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<SizedBloc
     )
 }
 
+fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<SizedBlock>> {
+    let chan = SyncChannel::new(1);
+    let sender = chan.sender();
+
+    Fetcher::from(
+        chan.into_receiver(),
+        spawn_thread("blkfiles_parser", move || {
+            blobs.map(|blob| {
+                trace!("parsing {} bytes", blob.len());
+                let blocks = parse_blocks_fractal(blob, magic).expect("failed to parse blk*.dat file");
+                sender
+                    .send(blocks)
+                    .expect("failed to send blocks from blk*.dat file");
+            });
+        }),
+    )
+}
+
 fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     let mut cursor = Cursor::new(&blob);
     let mut slices = vec![];
@@ -202,6 +226,56 @@ fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         let block_size = u32::consensus_decode(&mut cursor).chain_err(|| "no block size")?;
         let start = cursor.position();
         let end = start + block_size as u64;
+
+        // If Core's WriteBlockToDisk ftell fails, only the magic bytes and size will be written
+        // and the block body won't be written to the blk*.dat file.
+        // Since the first 4 bytes should contain the block's version, we can skip such blocks
+        // by peeking the cursor (and skipping previous `magic` and `block_size`).
+        match u32::consensus_decode(&mut cursor) {
+            Ok(value) => {
+                if magic == value {
+                    cursor.set_position(start);
+                    continue;
+                }
+            }
+            Err(_) => break, // EOF
+        }
+        slices.push((&blob[start as usize..end as usize], block_size));
+        cursor.set_position(end);
+    }
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(0) // CPU-bound
+        .thread_name(|i| format!("parse-blocks-{}", i))
+        .build()
+        .unwrap();
+    Ok(pool.install(|| {
+        slices
+            .into_par_iter()
+            .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
+            .collect()
+    }))
+}
+
+fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
+    let mut cursor = Cursor::new(&blob);
+    let mut slices = vec![];
+    let max_pos = blob.len() as u64;
+
+    while cursor.position() < max_pos {
+        let offset = cursor.position();
+        match u32::consensus_decode(&mut cursor) {
+            Ok(value) => {
+                if magic != value {
+                    cursor.set_position(offset + 1);
+                    continue;
+                }
+            }
+            Err(_) => break, // EOF
+        };
+        let block_size = u32::consensus_decode(&mut cursor).chain_err(|| "no block size")?;
+        let start = cursor.position();
+        let end = (start + block_size as u64).min(blob.len() as u64);
 
         // If Core's WriteBlockToDisk ftell fails, only the magic bytes and size will be written
         // and the block body won't be written to the blk*.dat file.

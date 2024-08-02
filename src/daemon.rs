@@ -408,6 +408,10 @@ impl Daemon {
         self.magic.unwrap_or_else(|| self.network.magic())
     }
 
+    pub fn network(&self) -> Network {
+        self.network
+    }
+
     fn call_jsonrpc(&self, method: &str, request: &Value) -> Result<Value> {
         let mut conn = self.conn.lock().unwrap();
         let timer = self.latency.with_label_values(&[method]).start_timer();
