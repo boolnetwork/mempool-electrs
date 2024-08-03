@@ -10,6 +10,8 @@ use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::thread;
+use bitcoin::BlockHeader;
+use bitcoin::hashes::{Hash, sha256d};
 
 use crate::chain::{Block, BlockHash};
 use crate::chain::Network::Fractal;
@@ -275,7 +277,17 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         };
         let block_size = u32::consensus_decode(&mut cursor).chain_err(|| "no block size")?;
         let start = cursor.position();
-        let end = (start + block_size as u64).min(blob.len() as u64);
+        let end = match start.checked_add(block_size as u64) {
+            Some(e) if e <= max_pos => e,
+            _ => {
+                // 00382d6674753d746573726168633b6e69616c70f7478657418010164726f03
+                // 0000000004a71fe8577cc7c32c8a73f0489d6f149c9e62a1bc273e7488784601
+                // Deserialize block header
+                let block_header: BlockHeader = deserialize(&blob[start as usize..start as usize + 80]).unwrap();
+                error!("Invalid block size or data overflow at position {}， Block header: {:?}", start, block_header);
+                break;
+            }
+        };
 
         // If Core's WriteBlockToDisk ftell fails, only the magic bytes and size will be written
         // and the block body won't be written to the blk*.dat file.
@@ -290,10 +302,7 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
             }
             Err(_) => break, // EOF
         }
-        debug!("start: {}", start);
-        debug!("end: {}", end);
-        debug!("block_size: {}", block_size);
-        debug!("blob_size: {}", blob.len());
+
         slices.push((&blob[start as usize..end as usize], block_size));
         cursor.set_position(end);
     }
@@ -306,11 +315,7 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     Ok(pool.install(|| {
         slices
             .into_par_iter()
-            .map(|(slice, size)| {
-                debug!("slice_len: {}", slice.len());
-                debug!("size: {}", size);
-                (deserialize(slice).expect("failed to parse Block"), size)
-            })
+            .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
             .collect()
     }))
 }
