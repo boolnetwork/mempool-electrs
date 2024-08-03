@@ -290,6 +290,10 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
             }
             Err(_) => break, // EOF
         }
+        debug!("start: {}", start);
+        debug!("end: {}", end);
+        debug!("block_size: {}", block_size);
+        debug!("blob_size: {}", blob.len());
         slices.push((&blob[start as usize..end as usize], block_size));
         cursor.set_position(end);
     }
