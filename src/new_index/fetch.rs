@@ -306,7 +306,11 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     Ok(pool.install(|| {
         slices
             .into_par_iter()
-            .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
+            .map(|(slice, size)| {
+                debug!("slice_len: {}", slice.len());
+                debug!("size: {}", size);
+                (deserialize(slice).expect("failed to parse Block"), size)
+            })
             .collect()
     }))
 }
