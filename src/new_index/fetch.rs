@@ -11,13 +11,15 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::thread;
 use bitcoin::BlockHeader;
-use bitcoin::hashes::{Hash, sha256d};
+use bitcoin::consensus::encode::Error::UnsupportedSegwitFlag;
+use byteorder::{BigEndian, ReadBytesExt};
 
 use crate::chain::{Block, BlockHash};
 use crate::chain::Network::Fractal;
 use crate::daemon::Daemon;
 use crate::errors::*;
 use crate::util::{spawn_thread, HeaderEntry, SyncChannel};
+
 
 #[derive(Clone, Copy, Debug)]
 pub enum FetchFrom {
@@ -56,8 +58,8 @@ impl<T> Fetcher<T> {
     }
 
     pub fn map<F>(self, mut func: F)
-    where
-        F: FnMut(T),
+        where
+            F: FnMut(T),
     {
         for item in self.receiver {
             func(item);
@@ -118,7 +120,7 @@ fn blkfiles_fetcher(
 
     let parser = if daemon.network().eq(&Fractal) {
         blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
-    }else {
+    } else {
         blkfiles_parser(blkfiles_reader(blk_files), magic)
     };
 
@@ -266,7 +268,7 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
 
     while cursor.position() < max_pos {
         let offset = cursor.position();
-        match u32::consensus_decode(&mut cursor) {
+        match ReadBytesExt::read_u32::<BigEndian>(&mut cursor) {
             Ok(value) => {
                 if magic != value {
                     cursor.set_position(offset + 1);
@@ -274,26 +276,30 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
                 }
             }
             Err(_) => break, // EOF
-        };
+        }
         let block_size = u32::consensus_decode(&mut cursor).chain_err(|| "no block size")?;
+        println!("block_size {}", block_size);
+
+        let auxpow_size = u32::consensus_decode(&mut cursor).chain_err(|| "no auxpow size")?;
+        println!("auxpow_size {}", auxpow_size);
+
         let start = cursor.position();
-        let end = match start.checked_add(block_size as u64) {
-            Some(e) if e <= max_pos => e,
-            _ => {
-                // 00382d6674753d746573726168633b6e69616c70f7478657418010164726f03
-                // 0000000004a71fe8577cc7c32c8a73f0489d6f149c9e62a1bc273e7488784601
-                // Deserialize block header
-                let block_header: BlockHeader = deserialize(&blob[start as usize..start as usize + 80]).unwrap();
-                error!("Invalid block size or data overflow at position {}， Block header: {:?}", start, block_header);
-                break;
-            }
-        };
+        println!("start {}", start);
+
+        let header_end = start + 80;
+        println!("header_end {}", header_end);
+
+        let ntx_start = header_end + auxpow_size as u64;
+        println!("ntx_start {}", ntx_start);
+
+        let end = start + block_size as u64;
+        println!("end {}", end);
 
         // If Core's WriteBlockToDisk ftell fails, only the magic bytes and size will be written
         // and the block body won't be written to the blk*.dat file.
         // Since the first 4 bytes should contain the block's version, we can skip such blocks
         // by peeking the cursor (and skipping previous `magic` and `block_size`).
-        match u32::consensus_decode(&mut cursor) {
+        match ReadBytesExt::read_u32::<BigEndian>(&mut cursor) {
             Ok(value) => {
                 if magic == value {
                     cursor.set_position(start);
@@ -303,7 +309,11 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
             Err(_) => break, // EOF
         }
 
-        slices.push((&blob[start as usize..end as usize], block_size));
+        let mut block_data = vec![];
+        println!("block_data len: {}", header_end -start + (end - ntx_start));
+        block_data.extend_from_slice(&blob[start as usize..header_end as usize]);
+        block_data.extend_from_slice(&blob[ntx_start as usize..end as usize]);
+        slices.push((block_data, block_size));
         cursor.set_position(end);
     }
 
@@ -312,10 +322,70 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         .thread_name(|i| format!("parse-blocks-{}", i))
         .build()
         .unwrap();
+
     Ok(pool.install(|| {
         slices
             .into_par_iter()
-            .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
+            .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
             .collect()
     }))
+}
+
+
+#[cfg(test)]
+mod test {
+    use std::fs;
+    use std::io::{self, Cursor, Read};
+    use bitcoin::consensus::Decodable;
+    use byteorder::{BigEndian, ReadBytesExt};
+    use crate::new_index::fetch::parse_blocks_fractal;
+
+    fn parse_blocks_magic(blob: Vec<u8>, expected_magic: u32) -> io::Result<()> {
+        let mut cursor = Cursor::new(blob);
+        let max_pos = cursor.get_ref().len() as u64;
+
+        while cursor.position() < max_pos {
+            let offset = cursor.position();
+            let magic = cursor.read_u32::<BigEndian>()?;
+
+            if magic == expected_magic {
+                println!("Found expected magic: {:x} at offset {}", magic, offset);
+            } else {
+                // println!("Unexpected magic: {:x} at offset {}, expected: {:x}", magic, offset, expected_magic);
+                cursor.set_position(offset + 1);
+                continue;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_blk() {
+        let blob = fs::read("../fractald-release/fractald-docker/data/blocks/blk00002.dat").unwrap();
+        println!("blob len: {}", blob.len());
+        // parse_blocks_magic(blob, 0xE8ADA3C8).unwrap();
+        let result = parse_blocks_fractal(blob, 0xe8ada3c8).unwrap();
+        println!("{:?}", result);
+    }
+
+    #[test]
+    fn test_u32()  {
+        let mut a = 1u32.to_le_bytes().to_vec();
+        let mut b = 2u32.to_le_bytes().to_vec();
+        a.append(&mut b);
+        println!("{a:?}");
+        let mut cursor = Cursor::new(&a);
+        let r1 = u32::consensus_decode(&mut cursor).unwrap();
+        let r2 = u32::consensus_decode(&mut cursor).unwrap();
+        println!("{}, {}", r1, r2);
+
+        let mut a2 = 1u32.to_be_bytes().to_vec();
+        let mut b2 = 2u32.to_be_bytes().to_vec();
+        a2.append(&mut b2);
+        let mut cursor = Cursor::new(&a2);
+        let r1 = ReadBytesExt::read_u32::<BigEndian>(&mut cursor).unwrap();
+        let r2 = ReadBytesExt::read_u32::<BigEndian>(&mut cursor).unwrap();
+        println!("{}, {}", r1, r2);
+    }
 }
