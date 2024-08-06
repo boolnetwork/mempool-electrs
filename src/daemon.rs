@@ -611,6 +611,7 @@ impl Daemon {
                 let remaining_header_data = &header_hex[header_len..];
                 if let Some(block_value) = block_values.get_mut(idx) {
                     let block_hex = block_value.as_str().chain_err(|| "non-string block")?;
+                    assert_eq!(block_hex[..header_len], header_hex[..header_len]);
                     let updated_block_hex = block_hex.replace(remaining_header_data, "");
                     *block_value = Value::String(updated_block_hex);
                 }
