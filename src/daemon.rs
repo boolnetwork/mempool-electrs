@@ -17,8 +17,8 @@ use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
 
-use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::chain::Network::Fractal;
+use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
 use crate::signal::Waiter;
 use crate::util::HeaderList;
@@ -59,6 +59,12 @@ fn header_from_value_fractal(value: Value) -> Result<BlockHeader> {
 
 fn block_from_value(value: Value) -> Result<Block> {
     let block_hex = value.as_str().chain_err(|| "non-string block")?;
+    let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
+    deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
+}
+
+fn fractal_block_from_value(block_hex: Value) -> Result<Block> {
+    let block_hex = block_hex.as_str().chain_err(|| "non-string block")?;
     let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
     deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
 }
@@ -299,7 +305,8 @@ pub struct Daemon {
     network: Network,
     magic: Option<u32>,
     conn: Mutex<Connection>,
-    message_id: Counter, // for monotonic JSONRPC 'id'
+    message_id: Counter,
+    // for monotonic JSONRPC 'id'
     signal: Waiter,
 
     // monitoring
@@ -535,7 +542,7 @@ impl Daemon {
                 "getblockheader",
                 json!([blockhash.to_hex(), /*verbose=*/ false]),
             )?)
-        }else {
+        } else {
             header_from_value(self.request(
                 "getblockheader",
                 json!([blockhash.to_hex(), /*verbose=*/ false]),
@@ -554,7 +561,7 @@ impl Daemon {
         for h in self.requests("getblockheader", &params_list)? {
             if self.network.eq(&Fractal) {
                 result.push(header_from_value_fractal(h)?);
-            }else {
+            } else {
                 result.push(header_from_value(h)?);
             }
         }
@@ -582,6 +589,37 @@ impl Daemon {
         let mut blocks = vec![];
         for value in values {
             blocks.push(block_from_value(value)?);
+        }
+        Ok(blocks)
+    }
+
+    pub fn get_fractal_bocks(&self, blockhashes: &[BlockHash]) -> Result<Vec<Block>> {
+        let params_list: Vec<Value> = blockhashes
+            .iter()
+            .map(|hash| json!([hash.to_hex(), /*verbose=*/ false]))
+            .collect();
+
+        let mut block_values = self.requests("getblock", &params_list)?;
+        let block_header_values = self.requests("getblockheader", &params_list)?;
+        assert_eq!(block_values.len(), block_header_values.len());
+        for (idx, block_header_value) in block_header_values.iter().enumerate() {
+            let header_hex = block_header_value
+                .as_str()
+                .chain_err(|| "non-string block header")?;
+            let header_len = 80 * 2;
+            if header_hex.len() > header_len {
+                let remaining_header_data = &header_hex[header_len..];
+                if let Some(block_value) = block_values.get_mut(idx) {
+                    let block_hex = block_value.as_str().chain_err(|| "non-string block")?;
+                    let updated_block_hex = block_hex.replace(remaining_header_data, "");
+                    *block_value = Value::String(updated_block_hex);
+                }
+            }
+        }
+
+        let mut blocks = vec![];
+        for value in block_values {
+            blocks.push(fractal_block_from_value(value)?);
         }
         Ok(blocks)
     }

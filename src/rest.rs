@@ -1783,7 +1783,7 @@ fn address_to_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpE
                     network,
                     Network::Regtest | Network::Signet | Network::Testnet4
                 ))
-        || (addr_network == Network::Bitcoin && network.eq(&Network::Fractal))
+            || (addr_network == Network::Bitcoin && network.eq(&Network::Fractal))
     };
 
     #[cfg(feature = "liquid")]
