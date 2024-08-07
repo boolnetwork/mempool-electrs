@@ -922,9 +922,7 @@ impl ChainQuery {
                 self.tx_confirming_block(&history.get_txid())
                     // drop history entries that were previously confirmed in a re-orged block and later
                     // confirmed again at a different height
-                    .filter(|blockid| {
-                        blockid.height == history.key.confirmed_height as usize
-                    })
+                    .filter(|blockid| blockid.height == history.key.confirmed_height as usize)
                     .map(|blockid| (history, blockid))
             })
             .collect::<Vec<_>>();
@@ -1026,10 +1024,7 @@ impl ChainQuery {
     }
 
     pub fn height_by_timestamp(&self, timestamp: u32, max_step: usize) -> Option<usize> {
-        let indexer = self.store
-            .indexed_headers
-            .read()
-            .unwrap();
+        let indexer = self.store.indexed_headers.read().unwrap();
         let mut index = indexer.len() - 1;
         let mut step = 1;
         loop {
@@ -1038,7 +1033,7 @@ impl ChainQuery {
             }
             if let Some(header) = indexer.header_by_height(index) {
                 if header.header().time <= timestamp {
-                    return Some(header.height())
+                    return Some(header.height());
                 }
             } else {
                 return None;
