@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "bnk-types"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2939,7 +2939,7 @@ dependencies = [
 
 [[package]]
 name = "node-primitives"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bls-signatures",
  "bnk-types",
@@ -3191,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "pallets-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "hex",

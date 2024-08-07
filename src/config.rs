@@ -66,6 +66,7 @@ pub struct Config {
     pub warn_time: u16,
     pub config_version: u16,
     pub device_owner: String,
+    pub watcher_device_id: String,
     pub sgx_enable: bool,
 
     #[cfg(feature = "liquid")]
@@ -289,11 +290,16 @@ impl Config {
                     .help("device_owner")
                     .default_value("0x1234")
             ).arg(
+                Arg::with_name("watcher_device_id")
+                    .long("watcher-device-id")
+                    .help("watcher_device_id")
+                    .default_value("0x1234")
+            ).arg(
                 Arg::with_name("sgx_enable")
                     .long("sgx-enable")
                     .help("enable sgx and register to bool network")
                     .takes_value(false));
-
+                
         #[cfg(unix)]
         let args = args.arg(
                 Arg::with_name("http_socket_file")
@@ -509,6 +515,7 @@ impl Config {
 
         let subclient_url = m.value_of("subclient_url").expect("subclient_url");
         let device_owner = m.value_of("device_owner").expect("device_owner");
+        let watcher_device_id = m.value_of("watcher_device_id").expect("watcher_device_id");
 
         let config = Config {
             log,
@@ -573,6 +580,7 @@ impl Config {
             warn_time: value_t_or_exit!(m, "warn_time", u16),
             config_version: value_t_or_exit!(m, "config_version", u16),
             device_owner: device_owner.to_string(),
+            watcher_device_id: watcher_device_id.to_string(),
             sgx_enable: m.is_present("sgx_enable"),
 
             #[cfg(feature = "liquid")]
