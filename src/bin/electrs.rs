@@ -155,6 +155,8 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
                 config.warn_time.into(),
                 config.config_version,
                 config.device_owner.clone(),
+                config.watcher_device_id.clone(),
+                2u16
             )
             .await
         })
