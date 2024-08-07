@@ -17,6 +17,7 @@ use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
 
+use crate::chain::Network::Fractal;
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
 use crate::signal::Waiter;
@@ -44,8 +45,26 @@ fn header_from_value(value: Value) -> Result<BlockHeader> {
     deserialize(&header_bytes).chain_err(|| format!("failed to parse header {}", header_hex))
 }
 
+fn header_from_value_fractal(value: Value) -> Result<BlockHeader> {
+    let header_hex = value
+        .as_str()
+        .chain_err(|| format!("non-string header: {}", value))?;
+    let header_bytes = hex::decode(header_hex).chain_err(|| "non-hex header")?;
+    if header_bytes.len() < 80 {
+        return Err("header is too short")?;
+    }
+    let header_bytes = &header_bytes[0..80];
+    deserialize(header_bytes).chain_err(|| format!("failed to parse header {}", header_hex))
+}
+
 fn block_from_value(value: Value) -> Result<Block> {
     let block_hex = value.as_str().chain_err(|| "non-string block")?;
+    let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
+    deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
+}
+
+fn fractal_block_from_value(block_hex: Value) -> Result<Block> {
+    let block_hex = block_hex.as_str().chain_err(|| "non-string block")?;
     let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
     deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
 }
@@ -286,7 +305,8 @@ pub struct Daemon {
     network: Network,
     magic: Option<u32>,
     conn: Mutex<Connection>,
-    message_id: Counter, // for monotonic JSONRPC 'id'
+    message_id: Counter,
+    // for monotonic JSONRPC 'id'
     signal: Waiter,
 
     // monitoring
@@ -393,6 +413,10 @@ impl Daemon {
 
     pub fn magic(&self) -> u32 {
         self.magic.unwrap_or_else(|| self.network.magic())
+    }
+
+    pub fn network(&self) -> Network {
+        self.network
     }
 
     fn call_jsonrpc(&self, method: &str, request: &Value) -> Result<Value> {
@@ -513,10 +537,17 @@ impl Daemon {
     }
 
     pub fn getblockheader(&self, blockhash: &BlockHash) -> Result<BlockHeader> {
-        header_from_value(self.request(
-            "getblockheader",
-            json!([blockhash.to_hex(), /*verbose=*/ false]),
-        )?)
+        if self.network.eq(&Fractal) {
+            header_from_value_fractal(self.request(
+                "getblockheader",
+                json!([blockhash.to_hex(), /*verbose=*/ false]),
+            )?)
+        } else {
+            header_from_value(self.request(
+                "getblockheader",
+                json!([blockhash.to_hex(), /*verbose=*/ false]),
+            )?)
+        }
     }
 
     pub fn getblockheaders(&self, heights: &[usize]) -> Result<Vec<BlockHeader>> {
@@ -528,7 +559,11 @@ impl Daemon {
             .collect();
         let mut result = vec![];
         for h in self.requests("getblockheader", &params_list)? {
-            result.push(header_from_value(h)?);
+            if self.network.eq(&Fractal) {
+                result.push(header_from_value_fractal(h)?);
+            } else {
+                result.push(header_from_value(h)?);
+            }
         }
         Ok(result)
     }
@@ -554,6 +589,38 @@ impl Daemon {
         let mut blocks = vec![];
         for value in values {
             blocks.push(block_from_value(value)?);
+        }
+        Ok(blocks)
+    }
+
+    pub fn get_fractal_bocks(&self, blockhashes: &[BlockHash]) -> Result<Vec<Block>> {
+        let params_list: Vec<Value> = blockhashes
+            .iter()
+            .map(|hash| json!([hash.to_hex(), /*verbose=*/ false]))
+            .collect();
+
+        let mut block_values = self.requests("getblock", &params_list)?;
+        let block_header_values = self.requests("getblockheader", &params_list)?;
+        assert_eq!(block_values.len(), block_header_values.len());
+        for (idx, block_header_value) in block_header_values.iter().enumerate() {
+            let header_hex = block_header_value
+                .as_str()
+                .chain_err(|| "non-string block header")?;
+            let header_len = 80 * 2;
+            if header_hex.len() > header_len {
+                let remaining_header_data = &header_hex[header_len..];
+                if let Some(block_value) = block_values.get_mut(idx) {
+                    let block_hex = block_value.as_str().chain_err(|| "non-string block")?;
+                    assert_eq!(block_hex[..header_len], header_hex[..header_len]);
+                    let updated_block_hex = block_hex.replace(remaining_header_data, "");
+                    *block_value = Value::String(updated_block_hex);
+                }
+            }
+        }
+
+        let mut blocks = vec![];
+        for value in block_values {
+            blocks.push(fractal_block_from_value(value)?);
         }
         Ok(blocks)
     }
