@@ -28,7 +28,7 @@ COPY ./Cargo.toml ./node/Cargo.toml
 WORKDIR /RUST/node
 RUN git config --system core.longpaths true
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-RUN occlum-cargo build --release
+RUN occlum-cargo build --release --bin electrs
 COPY ./occlum/sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
 COPY ./occlum/occlum_build.sh ./occlum_build.sh
 COPY ./occlum/rust-demo.yaml ./rust-demo.yaml
