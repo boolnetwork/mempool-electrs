@@ -146,22 +146,24 @@ fn run_server(config: Arc<Config>) -> Result<()> {
 }
 
 fn register_to_bool(config: Arc<Config>) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-
     if config.sgx_enable {
-        rt.block_on(async {
-            sgx_bool_registration_tool::register_sgx_2(
-                config.subclient_url.clone(),
-                config.warn_time.into(),
-                config.config_version,
-                config.device_owner.clone(),
-                config.watcher_device_id.clone(),
-                2u16
-            )
-            .await
-        })
-        .map_err(|e| format!("register error: {e:?}"))?;
+        electrs::util::spawn_thread("register", move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let _ = sgx_bool_registration_tool::register_sgx_2(
+                    config.subclient_url.clone(),
+                    config.warn_time.into(),
+                    config.config_version,
+                    config.device_owner.clone(),
+                    config.watcher_device_id.clone(),
+                    2u16
+                )
+                .await;
+                std::thread::park();
+            });
+        });
     } else {
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             sgx_bool_registration_tool::register_sgx_test().await;
         });
