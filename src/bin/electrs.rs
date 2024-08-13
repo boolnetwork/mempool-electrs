@@ -168,7 +168,7 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
             sgx_bool_registration_tool::register_sgx_test().await;
         });
     }
-
+    std::thread::sleep(std::time::Duration::from_secs(8));
     Ok(())
 }
 
