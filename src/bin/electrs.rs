@@ -166,6 +166,10 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             sgx_bool_registration_tool::register_sgx_test().await;
+            let pk = hex::decode(&config.relate_device_id_test).unwrap();
+            let mut list = sgx_bool_registration_tool::RELATEDEVICEIDS.read().unwrap().clone().unwrap();
+            list.push(pk);
+            *sgx_bool_registration_tool::RELATEDEVICEIDS.write().unwrap() = Some(list);
         });
     }
     std::thread::sleep(std::time::Duration::from_secs(8));
