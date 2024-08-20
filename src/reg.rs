@@ -46,3 +46,11 @@ pub fn create_sgx_response<T: serde::Serialize>(value: T, sgx_enable: bool) -> S
     );
     value
 }
+
+pub fn seal_data(value: Vec<u8>) -> Vec<u8>{
+    sgx_bool_registration_tool::sealing(value).unwrap()
+}
+
+pub fn unseal_data(value: Vec<u8>) -> Vec<u8>{
+    sgx_bool_registration_tool::unsealing(value).unwrap()
+}
