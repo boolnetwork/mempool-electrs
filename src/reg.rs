@@ -1,9 +1,9 @@
-
 use bitcoin::Block;
 
 use crate::util::HeaderEntry;
 
 use serde_json::Value;
+use reqwest::{Url, blocking::Client};
 
 pub fn validate_tx_root(block: &Block, entry: &HeaderEntry){
 
@@ -53,4 +53,29 @@ pub fn seal_data(value: Vec<u8>) -> Vec<u8>{
 
 pub fn unseal_data(value: Vec<u8>) -> Vec<u8>{
     sgx_bool_registration_tool::unsealing(value).unwrap()
+}
+
+pub fn request(addr: String, auth: String ,req: &Value) -> crate::errors::Result<Value>{
+    let client = Client::builder()
+    .build()
+    .unwrap();
+
+    let url = Url::parse(&addr).unwrap();
+
+    let response: String = client
+    .post(url)
+    .header("Content-Type", "application/json")
+    .basic_auth("prz", Some("prz"))
+    .header(reqwest::header::AUTHORIZATION, auth)
+    .body(req.to_string())
+    .send()
+    .expect("failed to get response")
+    .text()
+    .expect("failed to get payload");
+    let response = 
+    sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
+    .map_err(|e| format!("{e:?}"))?;
+
+    let result: Value = serde_json::from_str(&response).map_err(|_| format!("json error"))?;  
+    Ok(result)  
 }
