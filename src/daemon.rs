@@ -393,6 +393,15 @@ impl Daemon {
         Ok(result)
     }
 
+    fn send_req(&self, req: &Value) -> Result<Value> {
+        let addr = self.conn.lock().unwrap().addr;
+        let url = format!("http://{}",addr.to_string());
+        let cookie = self.conn.lock().unwrap().cookie_getter.get()?;
+        let auth = format!("Basic {}",base64::encode(cookie));
+
+        crate::reg::request(url, auth, req)
+    }
+
     fn handle_request_batch(
         &self,
         method: &str,
@@ -403,16 +412,19 @@ impl Daemon {
         let chunks = params_list
             .iter()
             .map(|params| json!({"jsonrpc":"2.0", "method": method, "params": params, "id": id}))
-            .chunks(800); // Max Amount of batched requests
+            .chunks(3000); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
+        debug!("total_requests {}", total_requests);
         let mut failed_requests: u64 = 0;
         let threshold = (failure_threshold * total_requests as f64).round() as u64;
         let mut n = 0;
 
         for chunk in &chunks {
             let reqs = chunk.collect();
-            let mut replies = self.call_jsonrpc(method, &reqs)?;
+            //let mut replies = self.call_jsonrpc(method, &reqs)?;
+            let mut replies = self.send_req(&reqs).map_err(|e| format!("{e:?}"))?;
+            std::thread::sleep(std::time::Duration::from_secs(3));
             if let Some(replies_vec) = replies.as_array_mut() {
                 for reply in replies_vec {
                     n += 1;
