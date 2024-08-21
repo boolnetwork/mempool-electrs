@@ -512,6 +512,7 @@ impl Config {
 
         let mut log = stderrlog::new();
         log.module("pallets_api");
+        log.module("electrs");
         log.verbosity(m.occurrences_of("verbosity") as usize);
         log.timestamp(if m.is_present("timestamp") {
             stderrlog::Timestamp::Millisecond
