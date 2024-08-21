@@ -403,7 +403,7 @@ impl Daemon {
         let chunks = params_list
             .iter()
             .map(|params| json!({"jsonrpc":"2.0", "method": method, "params": params, "id": id}))
-            .chunks(50_000); // Max Amount of batched requests
+            .chunks(800); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
         let mut failed_requests: u64 = 0;
@@ -451,7 +451,7 @@ impl Daemon {
         loop {
             match self.handle_request_batch(method, params_list, failure_threshold) {
                 Err(Error(ErrorKind::Connection(msg), _)) => {
-                    warn!("reconnecting to bitcoind: {}", msg);
+                    debug!("reconnecting to bitcoind: {}", msg);
                     self.signal.wait(Duration::from_secs(3), false)?;
                     let mut conn = self.conn.lock().unwrap();
                     *conn = conn.reconnect()?;
@@ -463,8 +463,7 @@ impl Daemon {
     }
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
-
-        trace!("method {}",method);
+        debug!("request method {}",method);
         let filter = crate::reg::filter_requests(method);
         if filter.is_some() {
             return Ok(filter.unwrap());
@@ -476,6 +475,7 @@ impl Daemon {
     }
 
     fn requests(&self, method: &str, params_list: &[Value]) -> Result<Vec<Value>> {
+        debug!("requests method {}",method);
         self.retry_request_batch(method, params_list, 0.0)
     }
 
