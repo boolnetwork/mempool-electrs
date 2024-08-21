@@ -65,7 +65,6 @@ pub fn request(addr: String, auth: String ,req: &Value) -> crate::errors::Result
     let response: String = client
     .post(url)
     .header("Content-Type", "application/json")
-    .basic_auth("prz", Some("prz"))
     .header(reqwest::header::AUTHORIZATION, auth)
     .body(req.to_string())
     .send()
