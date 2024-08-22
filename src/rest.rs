@@ -22,7 +22,7 @@ use prometheus::{HistogramOpts, HistogramVec};
 use tokio::sync::oneshot;
 
 use hyperlocal::UnixServerExt;
-use std::fs;
+use std::{cmp, fs};
 #[cfg(feature = "liquid")]
 use {
     crate::elements::{peg::PegoutValue, AssetSorting, IssuanceValue},
@@ -712,15 +712,24 @@ fn handle_request(
             config.sgx_enable,
         ),
 
-        (&Method::GET, Some(&"blocks"), Some(&"timestamp"), Some(timestamp), Some(&"limit"), Some(max_step)) => {
+        (
+            &Method::GET,
+            Some(&"blocks"),
+            Some(&"timestamp"),
+            Some(timestamp),
+            Some(&"limit"),
+            Some(max_step),
+        ) => {
             let timestamp = timestamp.parse::<u32>()?;
             let max_step = max_step.parse::<usize>()?;
             let height = query
                 .chain()
                 .height_by_timestamp(timestamp, max_step)
-                .ok_or_else(|| HttpError::not_found("Height not found or exceed max step".to_string()))?;
+                .ok_or_else(|| {
+                    HttpError::not_found("Height not found or exceed max step".to_string())
+                })?;
             http_message(StatusCode::OK, height.to_string(), TTL_SHORT, config.sgx_enable,)
-        },
+        }
 
         (&Method::GET, Some(&"blocks"), start_height, None, None, None) => {
             let start_height = start_height.and_then(|height| height.parse::<usize>().ok());
@@ -1004,6 +1013,38 @@ fn handle_request(
             Some(script_type @ &"address"),
             Some(script_str),
             Some(&"txs"),
+            Some(&"summary"),
+            last_seen_txid,
+        )
+        | (
+            &Method::GET,
+            Some(script_type @ &"scripthash"),
+            Some(script_str),
+            Some(&"txs"),
+            Some(&"summary"),
+            last_seen_txid,
+        ) => {
+            let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
+            let last_seen_txid = last_seen_txid.and_then(|txid| Txid::from_hex(txid).ok());
+            let max_txs = cmp::min(
+                config.rest_default_max_address_summary_txs,
+                query_params
+                    .get("max_txs")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(config.rest_default_max_address_summary_txs),
+            );
+
+            let summary = query
+                .chain()
+                .summary(&script_hash[..], last_seen_txid.as_ref(), max_txs);
+
+            json_response(summary, TTL_SHORT)
+        }
+        (
+            &Method::GET,
+            Some(script_type @ &"address"),
+            Some(script_str),
+            Some(&"txs"),
             Some(&"mempool"),
             None,
         )
@@ -1273,6 +1314,48 @@ fn handle_request(
                 .broadcast_raw(&txhex)
                 .map_err(|err| HttpError::from(err.description().to_string()))?;
             http_message(StatusCode::OK, txid.to_hex(), 0, config.sgx_enable,)
+        }
+        (&Method::POST, Some(&"txs"), Some(&"test"), None, None, None) => {
+            let txhexes: Vec<String> =
+                serde_json::from_str(String::from_utf8(body.to_vec())?.as_str())?;
+
+            if txhexes.len() > 25 {
+                Result::Err(HttpError::from(
+                    "Exceeded maximum of 25 transactions".to_string(),
+                ))?
+            }
+
+            let maxfeerate = query_params
+                .get("maxfeerate")
+                .map(|s| {
+                    s.parse::<f64>()
+                        .map_err(|_| HttpError::from("Invalid maxfeerate".to_string()))
+                })
+                .transpose()?;
+
+            // pre-checks
+            txhexes.iter().enumerate().try_for_each(|(index, txhex)| {
+                // each transaction must be of reasonable size (more than 60 bytes, within 400kWU standardness limit)
+                if !(120..800_000).contains(&txhex.len()) {
+                    Result::Err(HttpError::from(format!(
+                        "Invalid transaction size for item {}",
+                        index
+                    )))
+                } else {
+                    // must be a valid hex string
+                    Vec::<u8>::from_hex(txhex)
+                        .map_err(|_| {
+                            HttpError::from(format!("Invalid transaction hex for item {}", index))
+                        })
+                        .map(|_| ())
+                }
+            })?;
+
+            let result = query
+                .test_mempool_accept(txhexes, maxfeerate)
+                .map_err(|err| HttpError::from(err.description().to_string()))?;
+
+            json_response(result, TTL_SHORT)
         }
         (&Method::GET, Some(&"txs"), Some(&"outspends"), None, None, None) => {
             let txid_strings: Vec<&str> = query_params
@@ -1698,12 +1781,16 @@ fn address_to_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpE
     #[cfg(not(feature = "liquid"))]
     let is_expected_net = {
         let addr_network = Network::from(addr.network);
-
+        debug!("{} network: {:?}", addr, addr_network);
         // Testnet, Regtest and Signet all share the same version bytes,
         // `addr_network` will be detected as Testnet for all of them.
         addr_network == network
             || (addr_network == Network::Testnet
-                && matches!(network, Network::Regtest | Network::Signet))
+                && matches!(
+                    network,
+                    Network::Regtest | Network::Signet | Network::Testnet4
+                ))
+            || (addr_network == Network::Bitcoin && network.eq(&Network::Fractal))
     };
 
     #[cfg(feature = "liquid")]

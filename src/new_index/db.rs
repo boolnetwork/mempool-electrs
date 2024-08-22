@@ -5,9 +5,11 @@ use std::path::Path;
 use crate::config::Config;
 use crate::util::{bincode_util, Bytes};
 
-use crate::reg::{seal_data, unseal_data};
-
-static DB_VERSION: u32 = 1;
+/// Each version will break any running instance with a DB that has a differing version.
+/// It will also break if light mode is enabled or disabled.
+// 1 = Original DB (since fork from Blockstream)
+// 2 = Add tx position to TxHistory rows and place Spending before Funding
+static DB_VERSION: u32 = 2;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct DBRow {
@@ -35,7 +37,7 @@ impl<'a> Iterator for ScanIterator<'a> {
         }
         Some(DBRow {
             key: key.to_vec(),
-            value: unseal_data(value.to_vec()),
+            value: value.to_vec(),
         })
     }
 }
@@ -62,7 +64,7 @@ impl<'a> Iterator for ReverseScanIterator<'a> {
 
         let row = DBRow {
             key: key.into(),
-            value: unseal_data(self.iter.value().unwrap().to_vec()), //self.iter.value().unwrap().into(),
+            value: self.iter.value().unwrap().into(),
         };
 
         self.iter.prev();
@@ -103,7 +105,6 @@ impl DB {
         self.db.set_options(&opts).unwrap();
     }
 
-    // only used in tx-fingerprint-stats
     pub fn raw_iterator(&self) -> rocksdb::DBRawIterator {
         self.db.raw_iterator()
     }
@@ -149,7 +150,7 @@ impl DB {
         rows.sort_unstable_by(|a, b| a.key.cmp(&b.key));
         let mut batch = rocksdb::WriteBatch::default();
         for row in rows {
-            batch.put(&row.key, seal_data(row.value));
+            batch.put(&row.key, &row.value);
         }
         let do_flush = match flush {
             DBFlush::Enable => true,
@@ -166,17 +167,17 @@ impl DB {
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
-        self.db.put(key, seal_data(value.to_vec())).unwrap();
+        self.db.put(key, value).unwrap();
     }
 
     pub fn put_sync(&self, key: &[u8], value: &[u8]) {
         let mut opts = rocksdb::WriteOptions::new();
         opts.set_sync(true);
-        self.db.put_opt(key, seal_data(value.to_vec()), &opts).unwrap();
+        self.db.put_opt(key, value, &opts).unwrap();
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Bytes> {
-        self.db.get(key).unwrap().map(|v| unseal_data(v))
+        self.db.get(key).unwrap().map(|v| v.to_vec())
     }
 
     fn verify_compatibility(&self, config: &Config) {
@@ -193,7 +194,6 @@ impl DB {
         match self.get(b"V") {
             None => self.put(b"V", &compatibility_bytes),
             Some(ref x) if x != &compatibility_bytes => {
-                println!("x={:?} compatibility_bytes={:?}",x,compatibility_bytes);
                 panic!("Incompatible database found. Please reindex.")
             }
             Some(_) => (),
