@@ -1038,7 +1038,7 @@ fn handle_request(
                 .chain()
                 .summary(&script_hash[..], last_seen_txid.as_ref(), max_txs);
 
-            json_response(summary, TTL_SHORT)
+            json_response(summary, TTL_SHORT, config.sgx_enable)
         }
         (
             &Method::GET,
@@ -1355,7 +1355,7 @@ fn handle_request(
                 .test_mempool_accept(txhexes, maxfeerate)
                 .map_err(|err| HttpError::from(err.description().to_string()))?;
 
-            json_response(result, TTL_SHORT)
+            json_response(result, TTL_SHORT, config.sgx_enable)
         }
         (&Method::GET, Some(&"txs"), Some(&"outspends"), None, None, None) => {
             let txid_strings: Vec<&str> = query_params
