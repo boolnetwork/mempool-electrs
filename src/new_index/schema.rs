@@ -376,21 +376,32 @@ impl Indexer {
             to_adds.len(),
             self.from
         );
-        for to_add in to_adds.chunks(5000) {
-            start_fetcher(self.from, &daemon, to_add.to_vec())?.map(|blocks| self.add(&blocks));
-            self.start_auto_compactions(&self.store.txstore_db);
-        }
 
-        let to_indexs = self.headers_to_index(&new_headers);
-        debug!(
-            "indexing history from {} blocks using {:?}",
-            to_indexs.len(),
-            self.from
-        );
-        for to_index in to_indexs.chunks(5000) {
-            start_fetcher(self.from, &daemon, to_index.to_vec())?.map(|blocks| self.index(&blocks));
-            self.start_auto_compactions(&self.store.history_db);
-        }
+        self.start_auto_compactions(&self.store.txstore_db);
+        self.start_auto_compactions(&self.store.history_db);
+
+        start_fetcher(self.from, &daemon, to_adds.to_vec())?
+        .map(|blocks|{ 
+            self.add(&blocks); 
+            self.index(&blocks);
+            if let DBFlush::Disable = self.flush {
+                debug!("flushing to disk");
+                self.store.txstore_db.flush();
+                self.store.history_db.flush();
+            }
+        });
+        
+        self.flush = DBFlush::Enable;
+
+        // let to_indexs = self.headers_to_index(&new_headers);
+        // debug!(
+        //     "indexing history from {} blocks using {:?}",
+        //     to_indexs.len(),
+        //     self.from
+        // );
+
+        // start_fetcher(self.from, &daemon, to_indexs.to_vec())?.map(|blocks| self.index(&blocks));
+        // self.start_auto_compactions(&self.store.history_db);
 
         if let DBFlush::Disable = self.flush {
             debug!("flushing to disk");
