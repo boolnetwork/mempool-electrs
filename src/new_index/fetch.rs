@@ -117,32 +117,35 @@ fn blkfiles_fetcher(
     let mut entry_map: HashMap<BlockHash, HeaderEntry> =
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
-    let parser = blkfiles_parser(blkfiles_reader(blk_files), magic);
     Ok(Fetcher::from(
         chan.into_receiver(),
         spawn_thread("blkfiles_fetcher", move || {
-            parser.map(|sizedblocks| {
-                let block_entries: Vec<BlockEntry> = sizedblocks
-                    .into_iter()
-                    .filter_map(|(block, size)| {
-                        let blockhash = block.block_hash();
+            for blk_files_chunk in blk_files.chunks(100) {
+                let parser = blkfiles_parser(blkfiles_reader(blk_files_chunk.to_vec()), magic);
+                parser.map(|sizedblocks| {
+                    let block_entries: Vec<BlockEntry> = sizedblocks
+                        .into_iter()
+                        .filter_map(|(block, size)| {
+                            let blockhash = block.block_hash();
 
-                        crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
+                            crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
 
-                        entry_map
-                            .remove(&blockhash)
-                            .map(|entry| BlockEntry { block, entry, size })
-                            .or_else(|| {
-                                trace!("skipping block {}", blockhash);
-                                None
-                            })
-                    })
-                    .collect();
-                trace!("fetched {} blocks", block_entries.len());
-                sender
-                    .send(block_entries)
-                    .expect("failed to send blocks entries from blk*.dat files");
-            });
+                            entry_map
+                                .remove(&blockhash)
+                                .map(|entry| BlockEntry { block, entry, size })
+                                .or_else(|| {
+                                    trace!("skipping block {}", blockhash);
+                                    None
+                                })
+                        })
+                        .collect();
+                    trace!("fetched {} blocks", block_entries.len());
+                    sender
+                        .send(block_entries)
+                        .expect("failed to send blocks entries from blk*.dat files");
+                });
+            }
+
             if !entry_map.is_empty() {
                 panic!(
                     "failed to index {} blocks from blk*.dat files",
