@@ -44,6 +44,11 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     let metrics = Metrics::new(config.monitoring_addr);
     metrics.start();
 
+    let store = Arc::new(Store::open(&config.db_path.join("newindex"), &config));
+
+    electrs::new_index::schema::test_db(store);
+
+
     let daemon = Arc::new(Daemon::new(
         config.daemon_dir.clone(),
         config.blocks_dir.clone(),
@@ -54,7 +59,6 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         signal.clone(),
         &metrics,
     )?);
-    let store = Arc::new(Store::open(&config.db_path.join("newindex"), &config));
     let mut indexer = Indexer::open(
         Arc::clone(&store),
         fetch_from(&config, &store),
@@ -196,10 +200,10 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
 
 fn main() {
     let config = Arc::new(Config::from_args());
-    if let Err(e) = register_to_bool(config.clone()) {
-        error!("register failed: {}", e.display_chain());
-        process::exit(1);
-    }
+    // if let Err(e) = register_to_bool(config.clone()) {
+    //     error!("register failed: {}", e.display_chain());
+    //     process::exit(1);
+    // }
     if let Err(e) = run_server(config) {
         error!("server failed: {}", e.display_chain());
         process::exit(1);

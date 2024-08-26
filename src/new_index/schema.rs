@@ -195,6 +195,29 @@ impl ScriptStats {
     }
 }
 
+
+pub fn test_db(store: Arc<Store>){
+    let mut row_test = Vec::new();
+    for i in 0..2880000{
+        let mut u32_vec = vec![0u32; 32];
+        use rand::Rng;
+        rand::thread_rng().fill(&mut u32_vec);
+        let mut value_vec = vec![0u32; 200];
+        rand::thread_rng().fill(&mut value_vec);
+
+        row_test.append(            
+            BlockRow{
+                key: BlockKey {
+                    code: b'B',
+                    hash: u32_vec,
+                },
+                value: value_vec
+         });
+    }
+    store.sync_db.write(rows, DBFlush::Enable);
+}
+
+
 pub struct Indexer {
     store: Arc<Store>,
     flush: DBFlush,
@@ -366,6 +389,27 @@ impl Indexer {
     }
 
     pub fn update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
+
+        let mut row_test = Vec::new();
+        for i in 0..2800000{
+            let mut u32_vec = vec![0u32; 32];
+            use rand::Rng;
+            rand::thread_rng().fill(&mut u32_vec);
+            let mut value_vec = vec![0u32; 200];
+            rand::thread_rng().fill(&mut value_vec);
+
+            row_test.append(            
+                BlockRow{
+                    key: BlockKey {
+                        code: b'B',
+                        hash: u32_vec,
+                    },
+                    value: value_vec
+             });
+        }
+
+        self.store.sync_db.write(rows, DBFlush::Enable);
+
         let daemon = daemon.reconnect()?;
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
