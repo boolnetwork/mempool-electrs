@@ -124,15 +124,18 @@ fn blkfiles_fetcher(
     let mut entry_map: HashMap<BlockHash, HeaderEntry> =
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
+        // let parser = if daemon.network().eq(&Fractal) {
+        //     blkfiles_parser_fractal(blkfiles_reader(blk_files_chunk.to_vec()), magic)
+        //   } else {
+        //       blkfiles_parser(blkfiles_reader(blk_files_chunk.to_vec()), magic)
+        //   };
+
     Ok(Fetcher::from(
         chan.into_receiver(),
         spawn_thread("blkfiles_fetcher", move || {
-            for blk_files_chunk in blk_files.chunks(100) {
-				let parser = if daemon.network().eq(&Fractal) {
- 			    blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
-   			 } else {
-   	            blkfiles_parser(blkfiles_reader(blk_files), magic)
-   			 };
+            for blk_files_chunk in blk_files.chunks(1) {
+                let parser = blkfiles_parser(blkfiles_reader(blk_files_chunk.to_vec()), magic);
+
                 parser.map(|sizedblocks| {
                     let block_entries: Vec<BlockEntry> = sizedblocks
                         .into_iter()
