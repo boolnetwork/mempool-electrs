@@ -44,9 +44,12 @@ pub struct Store {
     txstore_db: DB,
     history_db: DB,
     cache_db: DB,
+    sync_db: DB,
     added_blockhashes: RwLock<HashSet<BlockHash>>,
     indexed_blockhashes: RwLock<HashSet<BlockHash>>,
     indexed_headers: RwLock<HeaderList>,
+    synced_blockhashes: RwLock<HashSet<BlockHash>>,
+    sync_headers: RwLock<HeaderList>,
 }
 
 impl Store {
@@ -61,9 +64,26 @@ impl Store {
 
         let cache_db = DB::open(&path.join("cache"), config);
 
+        let sync_db = DB::open(&path.join("sync"), config);
+        let synced_blockhashes = load_blockhashes(&sync_db, &BlockRow::done_filter());
+        debug!("{} blocks were synced", synced_blockhashes.len());
+
         let headers = if let Some(tip_hash) = txstore_db.get(b"t") {
             let tip_hash = deserialize(&tip_hash).expect("invalid chain tip in `t`");
             let headers_map = load_blockheaders(&txstore_db);
+            debug!(
+                "{} headers were loaded, tip at {:?}",
+                headers_map.len(),
+                tip_hash
+            );
+            HeaderList::new(headers_map, tip_hash)
+        } else {
+            HeaderList::empty()
+        };
+
+        let sync_headers = if let Some(tip_hash) = sync_db.get(b"t") {
+            let tip_hash = deserialize(&tip_hash).expect("invalid chain tip in `t`");
+            let headers_map = load_sync_blockheaders(&sync_db);
             debug!(
                 "{} headers were loaded, tip at {:?}",
                 headers_map.len(),
@@ -78,9 +98,12 @@ impl Store {
             txstore_db,
             history_db,
             cache_db,
+            sync_db,
             added_blockhashes: RwLock::new(added_blockhashes),
             indexed_blockhashes: RwLock::new(indexed_blockhashes),
             indexed_headers: RwLock::new(headers),
+            synced_blockhashes: RwLock::new(synced_blockhashes),
+            sync_headers: RwLock::new(sync_headers),
         }
     }
 
@@ -98,6 +121,10 @@ impl Store {
 
     pub fn done_initial_sync(&self) -> bool {
         self.txstore_db.get(b"t").is_some()
+    }
+
+    pub fn done_initial_header_sync(&self) -> bool {
+        self.sync_db.get(b"t").is_some()
     }
 }
 
@@ -227,6 +254,15 @@ impl Indexer {
         self.duration.with_label_values(&[name]).start_timer()
     }
 
+    fn sync_headers_to_add(&self, new_headers: &[HeaderEntry]) -> Vec<HeaderEntry> {
+        let added_blockhashes = self.store.added_blockhashes.read().unwrap();
+        new_headers
+            .iter()
+            .filter(|e| !added_blockhashes.contains(e.hash()))
+            .cloned()
+            .collect()
+    }
+
     fn headers_to_add(&self, new_headers: &[HeaderEntry]) -> Vec<HeaderEntry> {
         let added_blockhashes = self.store.added_blockhashes.read().unwrap();
         new_headers
@@ -255,9 +291,72 @@ impl Indexer {
         db.enable_auto_compaction();
     }
 
+    // Returns a list of BlockHeaders in ascending height (i.e. the tip is last).
+    pub fn get_new_headers_from_sync_db(
+        &self,
+        indexed_headers: &HeaderList,
+        bestblockhash: &BlockHash,
+        sync_headers: &HeaderList,
+    ) -> Result<Vec<BlockHeader>> {
+        // Iterate back over headers until known blockash is found:
+        if indexed_headers.is_empty() {
+            debug!("COPY from SYNC all block headers up to {}", bestblockhash);
+            let block_headers = sync_headers.iter().map(|h|{
+                h.header().clone()
+            }).collect();
+            //return self.get_all_headers(bestblockhash);
+            return Ok(block_headers);
+        }
+        debug!(
+            "COPY from SYNC new block headers ({} already indexed) from {}",
+            indexed_headers.len(),
+            bestblockhash,
+        );
+        let mut new_headers = vec![];
+        let null_hash = BlockHash::default();
+        let mut blockhash = *bestblockhash;
+        while blockhash != null_hash {
+            if indexed_headers.header_by_blockhash(&blockhash).is_some() {
+                break;
+            }
+            // let header = self
+            //     .getblockheader(&blockhash)
+            //     .chain_err(|| format!("failed to get {} header", blockhash))?;
+            let header = sync_headers.header_by_blockhash(&blockhash).unwrap().header().clone();
+            blockhash = header.prev_blockhash;
+            new_headers.push(header);
+        }
+        trace!("COPY from SYNC {} block headers", new_headers.len());
+        new_headers.reverse(); // so the tip is the last vector entry
+        Ok(new_headers)
+    }
+
+    fn sync_headers(&self, daemon: &Daemon, tip: &BlockHash) -> Result<()>{
+            // sync download new headers and index it and fulsh it to db
+            let sync_headers = self.store.sync_headers.read().unwrap();
+            info!("SYNC {:?} sync_headers", sync_headers.len());
+            let new_headers = daemon.get_new_headers(&sync_headers, tip)?;
+            let sync_header_result = sync_headers.order(new_headers);
+            drop(sync_headers);
+            let to_add = self.sync_headers_to_add(&sync_header_result);
+            info!("SYNC {:?} to_add", to_add.len());
+            self.add_sync_block_header(&to_add);
+            self.store.sync_db.put_sync(b"t", &serialize(&tip));
+            let mut headers_sync = self.store.sync_headers.write().unwrap();
+            info!("SYNC {:?} apply", to_add.len());
+            headers_sync.apply(to_add);
+            assert_eq!(tip, headers_sync.tip());  
+            drop(headers_sync);
+            Ok(())
+    }
+
     fn get_new_headers(&self, daemon: &Daemon, tip: &BlockHash) -> Result<Vec<HeaderEntry>> {
+
+        self.sync_headers(daemon,tip)?;
+        let headers_sync = self.store.sync_headers.read().unwrap();
+
         let headers = self.store.indexed_headers.read().unwrap();
-        let new_headers = daemon.get_new_headers(&headers, tip)?;
+        let new_headers = self.get_new_headers_from_sync_db(&headers, tip, &headers_sync)?;
         let result = headers.order(new_headers);
 
         if let Some(tip) = result.last() {
@@ -313,10 +412,26 @@ impl Indexer {
         Ok(tip)
     }
 
+    fn add_sync_block_header(&self, headers: &[HeaderEntry]) {
+        debug!("Adding {} blocks to SYNC headers", headers.len());
+        let rows = add_sync_headers(headers, &self.iconfig);
+        self.store.sync_db.write(rows, DBFlush::Enable);
+        self.store
+        .synced_blockhashes
+        .write()
+        .unwrap()
+        .extend(headers.iter().map(|b| {
+            if b.height() % 10_000 == 0 {
+                info!("SYNCED HEADER is up to height={}", b.height());
+            }
+            b.hash()
+        }));
+    }
+    
     fn add(&self, blocks: &[BlockEntry]) {
         debug!("Adding {} blocks to Indexer", blocks.len());
         // TODO: skip orphaned blocks?
-        let rows = {
+        let rows: Vec<DBRow> = {
             let _timer = self.start_timer("add_process");
             add_blocks(blocks, &self.iconfig)
         };
@@ -1224,6 +1339,17 @@ fn load_blockhashes(db: &DB, prefix: &[u8]) -> HashSet<BlockHash> {
         .collect()
 }
 
+fn load_sync_blockheaders(db: &DB) -> HashMap<BlockHash, BlockHeader> {
+    db.iter_scan(&BlockRow::header_sync_filter())
+        .map(BlockRow::from_row)
+        .map(|r| {
+            let key: BlockHash = deserialize(&r.key.hash).expect("failed to parse BlockHash");
+            let value: BlockHeader = deserialize(&r.value).expect("failed to parse BlockHeader");
+            (key, value)
+        })
+        .collect()
+}
+
 fn load_blockheaders(db: &DB) -> HashMap<BlockHash, BlockHeader> {
     db.iter_scan(&BlockRow::header_filter())
         .map(BlockRow::from_row)
@@ -1233,6 +1359,22 @@ fn load_blockheaders(db: &DB) -> HashMap<BlockHash, BlockHeader> {
             (key, value)
         })
         .collect()
+}
+
+fn add_sync_headers(header_entries: &[HeaderEntry], iconfig: &IndexerConfig) -> Vec<DBRow>  {
+    header_entries
+    .par_iter()
+    .map(|h|{
+        let mut rows = vec![];
+        let blockhash = full_hash(&h.hash()[..]);
+
+        rows.push(BlockRow::first_sync_header(h).into_row());
+        rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+
+        rows
+    })
+    .flatten()
+    .collect()
 }
 
 fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRow> {
@@ -1613,6 +1755,16 @@ impl BlockRow {
         }
     }
 
+    fn first_sync_header(header_entry: &HeaderEntry) -> BlockRow {
+        BlockRow {
+            key: BlockKey {
+                code: b'b',
+                hash: full_hash(&header_entry.hash()),
+            },
+            value: serialize(&header_entry.header()),
+        }
+    }
+
     fn new_txids(hash: FullHash, txids: &[Txid]) -> BlockRow {
         BlockRow {
             key: BlockKey { code: b'X', hash },
@@ -1632,6 +1784,10 @@ impl BlockRow {
             key: BlockKey { code: b'D', hash },
             value: vec![],
         }
+    }
+
+    fn header_sync_filter() -> Bytes {
+        b"b".to_vec()
     }
 
     fn header_filter() -> Bytes {
