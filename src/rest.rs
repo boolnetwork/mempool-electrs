@@ -1853,7 +1853,7 @@ fn select_utxos(utxos: &[UtxoValue], target_value: u64) -> (Vec<UtxoValue>, Vec<
             let mut total_amount = 0;
             let max_len = std::cmp::min(utxo_len, 20);
             // max inputs length is '20'
-            for i in 0..=max_len {
+            for i in 0..max_len {
                 total_amount += utxos[utxo_len - 1 - i].value;
                 choose_index.push(utxo_len - 1 - i);
                 choose_list.push(utxos[utxo_len - 1 - i].clone());
