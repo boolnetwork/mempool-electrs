@@ -271,23 +271,27 @@ impl Indexer {
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
 
-        let to_add = self.headers_to_add(&new_headers);
+        let to_adds = self.headers_to_add(&new_headers);
         debug!(
             "adding transactions from {} blocks using {:?}",
-            to_add.len(),
+            to_adds.len(),
             self.from
         );
-        start_fetcher(self.from, &daemon, to_add)?.map(|blocks| self.add(&blocks));
-        self.start_auto_compactions(&self.store.txstore_db);
+        for to_add in to_adds.chunks(5000) {
+            start_fetcher(self.from, &daemon, to_add.to_vec())?.map(|blocks| self.add(&blocks));
+            self.start_auto_compactions(&self.store.txstore_db);
+        }
 
-        let to_index = self.headers_to_index(&new_headers);
+        let to_indexs = self.headers_to_index(&new_headers);
         debug!(
             "indexing history from {} blocks using {:?}",
-            to_index.len(),
+            to_indexs.len(),
             self.from
         );
-        start_fetcher(self.from, &daemon, to_index)?.map(|blocks| self.index(&blocks));
-        self.start_auto_compactions(&self.store.history_db);
+        for to_index in to_indexs.chunks(5000) {
+            start_fetcher(self.from, &daemon, to_index.to_vec())?.map(|blocks| self.index(&blocks));
+            self.start_auto_compactions(&self.store.history_db);
+        }
 
         if let DBFlush::Disable = self.flush {
             debug!("flushing to disk");
