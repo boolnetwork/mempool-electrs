@@ -1966,7 +1966,7 @@ fn select_utxos(utxos: &[UtxoValue], target_value: u64) -> (Vec<UtxoValue>, Vec<
             let mut total_amount = 0;
             let max_len = std::cmp::min(utxo_len, 20);
             // max inputs length is '20'
-            for i in 0..=max_len {
+            for i in 0..max_len {
                 total_amount += utxos[utxo_len - 1 - i].value;
                 choose_index.push(utxo_len - 1 - i);
                 choose_list.push(utxos[utxo_len - 1 - i].clone());
@@ -2198,16 +2198,19 @@ mod tests {
             default_value.clone(),
             default_value.clone(),
             default_value.clone(),
+            default_value.clone(),
             default_value,
         ]
         .to_vec();
         utxos[0].value = 1000;
         utxos[1].value = 1000;
-        utxos[2].value = 1000;
-        utxos[3].value = 10000;
-        utxos[4].value = 13200;
+        utxos[2].value = 100;
+        utxos[3].value = 100000;
+        utxos[4].value = 17250;
+        utxos[5].value = 1000;
 
-        let res = select_utxos(&utxos, 17000);
+
+        let res = select_utxos(&utxos, 408250);
         println!("utxos: {:?}", serde_json::to_string(&res.0).unwrap());
         for (iter_index, selcet_index) in res.1.iter().enumerate() {
             println!("iter_index: {iter_index}, selcet_index: {selcet_index}");
