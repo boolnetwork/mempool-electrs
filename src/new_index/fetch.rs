@@ -142,15 +142,17 @@ fn blkfiles_fetcher(
                         .filter_map(|(block, size)| {
                             let blockhash = block.block_hash();
 
-                            crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
-
-                            entry_map
+                            if entry_map.get(&blockhash).is_some() {
+                                crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);  
+                                entry_map
                                 .remove(&blockhash)
-                                .map(|entry| BlockEntry { block, entry, size })
-                                .or_else(|| {
-                                    trace!("skipping block {}", blockhash);
-                                    None
-                                })
+                                .map(|entry|{
+                                    BlockEntry { block, entry, size }})  
+                            } else {
+                                trace!("skipping block {}", blockhash);
+                                None
+                            }
+                            
                         })
                         .collect();
                     trace!("fetched {} blocks", block_entries.len());
