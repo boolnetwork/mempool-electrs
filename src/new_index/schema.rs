@@ -198,7 +198,7 @@ impl ScriptStats {
 
 pub fn test_db(store: Arc<Store>){
     let mut row_test = Vec::new();
-    for i in 0..2880000{
+    for i in 0..5680000{
         let mut u32_vec = [0u8; 32];
         use rand::Rng;
         rand::thread_rng().fill(&mut u32_vec);
@@ -206,6 +206,10 @@ pub fn test_db(store: Arc<Store>){
         rand::thread_rng().fill(&mut value_vec);
 
         let mut vecdata = value_vec.to_vec();
+        vecdata.append(&mut vecdata.clone());
+        vecdata.append(&mut vecdata.clone());
+        vecdata.append(&mut vecdata.clone());
+        vecdata.append(&mut vecdata.clone());
         vecdata.append(&mut vecdata.clone());
 
         row_test.push(            
