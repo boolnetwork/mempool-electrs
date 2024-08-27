@@ -11,7 +11,7 @@ use crate::util::{bincode_util, Bytes};
 // 2 = Add tx position to TxHistory rows and place Spending before Funding
 static DB_VERSION: u32 = 2;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DBRow {
     pub key: Vec<u8>,
     pub value: Vec<u8>,

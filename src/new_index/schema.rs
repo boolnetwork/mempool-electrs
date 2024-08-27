@@ -430,7 +430,10 @@ impl Indexer {
     fn add_sync_block_header(&self, headers: &[HeaderEntry]) {
         debug!("Adding {} blocks to SYNC headers", headers.len());
         let rows = add_sync_headers(headers, &self.iconfig);
-        self.store.sync_db.write(rows, DBFlush::Enable);
+        for row in rows.chunks(50000){
+            debug!("Adding {} rows to SYNC headers", row.len());
+            self.store.sync_db.write(row.to_vec(), DBFlush::Enable);
+        }
         self.store
         .synced_blockhashes
         .write()
