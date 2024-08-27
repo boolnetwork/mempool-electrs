@@ -46,7 +46,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
 
     let store = Arc::new(Store::open(&config.db_path.join("newindex"), &config));
 
-    electrs::new_index::schema::test_db(store);
+    electrs::new_index::schema::test_db(Arc::clone(&store));
 
 
     let daemon = Arc::new(Daemon::new(
