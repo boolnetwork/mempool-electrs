@@ -461,7 +461,7 @@ impl Daemon {
         let chunks = params_list
             .iter()
             .map(|params| json!({"jsonrpc":"2.0", "method": method, "params": params, "id": id}))
-            .chunks(3000); // Max Amount of batched requests
+            .chunks(10000); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
         debug!("total_requests {}", total_requests);
@@ -473,7 +473,6 @@ impl Daemon {
             let reqs = chunk.collect();
             //let mut replies = self.call_jsonrpc(method, &reqs)?;
             let mut replies = self.send_req(&reqs).map_err(|e| format!("{e:?}"))?;
-            std::thread::sleep(std::time::Duration::from_secs(3));
             if let Some(replies_vec) = replies.as_array_mut() {
                 for reply in replies_vec {
                     n += 1;
@@ -498,6 +497,7 @@ impl Daemon {
             } else {
                 bail!("non-array replies: {:?}", replies);
             }
+            //std::thread::sleep(std::time::Duration::from_millis(300));
         }
 
         Ok(results)
