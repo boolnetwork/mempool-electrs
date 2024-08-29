@@ -12,7 +12,7 @@ use std::time::Duration;
 use electrs::{
     config::Config,
     daemon::Daemon,
-    electrum::RPC as ElectrumRPC,
+    //electrum::RPC as ElectrumRPC,
     errors::*,
     metrics::Metrics,
     new_index::{precache, ChainQuery, FetchFrom, Indexer, Mempool, Query, Store},
@@ -106,7 +106,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
 
     // TODO: configuration for which servers to start
     let rest_server = rest::start(Arc::clone(&config), Arc::clone(&query), &metrics);
-    let electrum_server = ElectrumRPC::start(Arc::clone(&config), Arc::clone(&query), &metrics);
+    //let electrum_server = ElectrumRPC::start(Arc::clone(&config), Arc::clone(&query), &metrics);
 
     if let Some(ref precache_file) = config.precache_scripts {
         let precache_scripthashes = precache::scripthashes_from_file(precache_file.to_string())
@@ -157,7 +157,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         }
 
         // Update subscribed clients
-        electrum_server.notify();
+        //electrum_server.notify();
     }
     info!("server stopped");
     Ok(())

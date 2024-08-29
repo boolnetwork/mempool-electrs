@@ -1,5 +1,5 @@
-mod server;
-pub use server::RPC;
+//mod server;
+//pub use server::RPC;
 
 #[cfg(feature = "electrum-discovery")]
 mod client;

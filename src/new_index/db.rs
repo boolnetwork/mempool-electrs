@@ -208,8 +208,8 @@ pub fn open_raw_db<T: rocksdb::ThreadMode>(path: &Path) -> rocksdb::DBWithThread
     db_opts.set_max_open_files(100_00); // TODO: make sure to `ulimit -n` this process correctly
     db_opts.set_compaction_style(rocksdb::DBCompactionStyle::Level);
     db_opts.set_compression_type(rocksdb::DBCompressionType::None);
-    db_opts.set_target_file_size_base(0x8000000);
-    db_opts.set_write_buffer_size(0x8000000);
+    db_opts.set_target_file_size_base(0x16000000);
+    db_opts.set_write_buffer_size(0x16000000);
     db_opts.set_disable_auto_compactions(true); // for initial bulk load
 
     // db_opts.set_advise_random_on_open(???);

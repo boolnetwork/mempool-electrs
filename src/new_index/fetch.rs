@@ -44,6 +44,9 @@ pub struct BlockEntry {
 
 type SizedBlock = (Block, u32);
 
+use std::sync::mpsc as crossbeam_channel;
+
+
 pub struct Fetcher<T> {
     receiver: crossbeam_channel::Receiver<T>,
     thread: thread::JoinHandle<()>,
