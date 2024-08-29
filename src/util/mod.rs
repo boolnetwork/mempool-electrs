@@ -37,21 +37,24 @@ pub fn full_hash(hash: &[u8]) -> FullHash {
     *array_ref![hash, 0, HASH_LEN]
 }
 
+
+use std::sync::mpsc as crossbeam_channel;
+
 pub struct SyncChannel<T> {
-    tx: Option<crossbeam_channel::Sender<T>>,
+    tx: Option<crossbeam_channel::SyncSender<T>>,
     rx: Option<crossbeam_channel::Receiver<T>>,
 }
 
 impl<T> SyncChannel<T> {
     pub fn new(size: usize) -> SyncChannel<T> {
-        let (tx, rx) = crossbeam_channel::bounded(size);
+        let (tx, rx) = crossbeam_channel::sync_channel(size);
         SyncChannel {
             tx: Some(tx),
             rx: Some(rx),
         }
     }
 
-    pub fn sender(&self) -> crossbeam_channel::Sender<T> {
+    pub fn sender(&self) -> crossbeam_channel::SyncSender<T> {
         self.tx.as_ref().expect("No Sender").clone()
     }
 

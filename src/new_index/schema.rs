@@ -415,10 +415,7 @@ impl Indexer {
     fn add_sync_block_header(&self, headers: &[HeaderEntry]) {
         debug!("Adding {} blocks to SYNC headers", headers.len());
         let rows = add_sync_headers(headers, &self.iconfig);
-        for row  in rows.chunks(50000){
-            debug!("Adding {} rows to SYNC headers", row.len());
-            self.store.sync_db.write(row.to_vec(), DBFlush::Enable);
-        }
+        self.store.sync_db.write(rows, DBFlush::Enable);
         self.store
         .synced_blockhashes
         .write()
@@ -440,10 +437,7 @@ impl Indexer {
         };
         {
             let _timer = self.start_timer("add_write");
-            for row  in rows.chunks(50000) {
-                debug!("txstore_db.write");
-                self.store.txstore_db.write(row.to_vec(), self.flush);                
-            }
+            self.store.txstore_db.write(rows, self.flush);                
         }
 
         self.store
@@ -479,10 +473,7 @@ impl Indexer {
             }
             index_blocks(blocks, &previous_txos_map, &self.iconfig)
         };
-        for row  in rows.chunks(50000) {
-            debug!("history_db.write");
-            self.store.history_db.write(row.to_vec(), self.flush);
-        }
+        self.store.history_db.write(rows, self.flush);
     }
 }
 
