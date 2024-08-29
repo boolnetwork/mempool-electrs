@@ -1,5 +1,5 @@
 pub mod db;
-mod fetch;
+pub(crate) mod fetch;
 mod mempool;
 pub mod precache;
 mod query;

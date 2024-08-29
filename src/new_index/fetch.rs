@@ -36,6 +36,7 @@ pub fn start_fetcher(
     fetcher(daemon, new_headers)
 }
 
+#[derive(Clone)]
 pub struct BlockEntry {
     pub block: Block,
     pub entry: HeaderEntry,
@@ -228,15 +229,15 @@ fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<S
 }
 
 lazy_static! {
-    static ref POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
-    .num_threads(0) // CPU-bound
+    pub static ref POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
+    .num_threads(3) // CPU-bound
     .thread_name(|i| format!("parse-blocks-{}", i))
     .build()
     .unwrap();
 }
 
 
-fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
+pub fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     let mut cursor = Cursor::new(&blob);
     let mut slices = vec![];
     let max_pos = blob.len() as u64;

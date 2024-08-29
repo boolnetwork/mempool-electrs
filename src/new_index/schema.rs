@@ -39,6 +39,8 @@ use crate::elements::{asset, peg};
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
+const NUM_THREAD: usize = 4;
+
 pub struct Store {
     // TODO: should be column families
     txstore_db: DB,
@@ -195,6 +197,7 @@ impl ScriptStats {
     }
 }
 
+#[derive(Clone)]
 pub struct Indexer {
     store: Arc<Store>,
     flush: DBFlush,
@@ -204,6 +207,7 @@ pub struct Indexer {
     tip_metric: Gauge,
 }
 
+#[derive(Clone)]
 struct IndexerConfig {
     light_mode: bool,
     address_search: bool,
@@ -366,6 +370,12 @@ impl Indexer {
     }
 
     pub fn update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
+
+        // let _ = rayon::ThreadPoolBuilder::new()
+        // .num_threads(12) // CPU-bound
+        // .build_global()
+        // .unwrap();
+
         let daemon = daemon.reconnect()?;
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
@@ -376,7 +386,8 @@ impl Indexer {
             to_add.len(),
             self.from
         );
-        start_fetcher(self.from, &daemon, to_add)?.map(|blocks| { self.add(&blocks); drop(blocks);});
+        //start_fetcher(self.from, &daemon, to_add)?.map(|blocks| { self.add(&blocks); drop(blocks);});
+        crate::reg::add_blocks(&self, &daemon, to_add)?;
         self.start_auto_compactions(&self.store.txstore_db);
 
         let to_index = self.headers_to_index(&new_headers);
@@ -385,7 +396,8 @@ impl Indexer {
             to_index.len(),
             self.from
         );
-        start_fetcher(self.from, &daemon, to_index)?.map(|blocks| { self.index(&blocks); drop(blocks);});
+        //start_fetcher(self.from, &daemon, to_index)?.map(|blocks| { self.index(&blocks); drop(blocks);});
+        crate::reg::index(&self, &daemon, to_index)?;
         self.start_auto_compactions(&self.store.history_db);
 
         if let DBFlush::Disable = self.flush {
@@ -415,7 +427,9 @@ impl Indexer {
     fn add_sync_block_header(&self, headers: &[HeaderEntry]) {
         debug!("Adding {} blocks to SYNC headers", headers.len());
         let rows = add_sync_headers(headers, &self.iconfig);
-        self.store.sync_db.write(rows, DBFlush::Enable);
+        for row in rows.chunks(50000) {
+            self.store.sync_db.write(row.to_vec(), DBFlush::Enable);      
+        }  
         self.store
         .synced_blockhashes
         .write()
@@ -428,16 +442,30 @@ impl Indexer {
         }));
     }
     
-    fn add(&self, blocks: &[BlockEntry]) {
+    pub fn add(&self, blocks: &[BlockEntry]) {
         debug!("Adding {} blocks to Indexer", blocks.len());
         // TODO: skip orphaned blocks?
         let rows: Vec<DBRow> = {
             let _timer = self.start_timer("add_process");
             add_blocks(blocks, &self.iconfig)
+            // let mut hs = Vec::new();
+
+            // for v in blocks.chunks(usize::max(blocks.len()/NUM_THREAD,1)){
+            //     let v: Vec<BlockEntry> = v.to_vec();
+            //     let iconfig = self.iconfig.clone();
+            //     let h = std::thread::spawn( move ||{ 
+            //         add_blocks(&v, &iconfig)
+            //     });
+            //     hs.push(h);
+            // };
+        
+            // hs.into_iter().map(|h| h.join().unwrap()).flatten().collect()
         };
         {
             let _timer = self.start_timer("add_write");
-            self.store.txstore_db.write(rows, self.flush);                
+            for row in rows.chunks(50000) {
+                self.store.txstore_db.write(row.to_vec(), self.flush);      
+            }             
         }
 
         self.store
@@ -452,13 +480,13 @@ impl Indexer {
             }));
     }
 
-    fn index(&self, blocks: &[BlockEntry]) {
+    pub fn index(&self, blocks: &[BlockEntry]) {
         debug!("Indexing {} blocks with Indexer", blocks.len());
         let previous_txos_map = {
             let _timer = self.start_timer("index_lookup");
             lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
         };
-        let rows = {
+        let rows: Vec<DBRow> = {
             let _timer = self.start_timer("index_process");
             let added_blockhashes = self.store.added_blockhashes.read().unwrap();
             for b in blocks {
@@ -472,8 +500,24 @@ impl Indexer {
                 }
             }
             index_blocks(blocks, &previous_txos_map, &self.iconfig)
+            // let mut hs = Vec::new();
+
+            // for v in blocks.chunks(blocks.len()/NUM_THREAD){
+            //     let v: Vec<BlockEntry> = v.to_vec();
+            //     let iconfig = self.iconfig.clone();
+            //     let previous_txos_map = previous_txos_map.clone();
+            //     let h = std::thread::spawn( move ||{ 
+            //         index_blocks(&v, &previous_txos_map, &iconfig)
+            //     });
+            //     hs.push(h);
+            // };
+        
+            // hs.into_iter().map(|h| h.join().unwrap()).flatten().collect()
+
         };
-        self.store.history_db.write(rows, self.flush);
+        for row in rows.chunks(50000) {
+            self.store.history_db.write(row.to_vec(), self.flush);      
+        }  
     }
 }
 
@@ -1362,19 +1406,41 @@ fn load_blockheaders(db: &DB) -> HashMap<BlockHash, BlockHeader> {
 }
 
 fn add_sync_headers(header_entries: &[HeaderEntry], iconfig: &IndexerConfig) -> Vec<DBRow>  {
-    header_entries
-    .iter()
-    .map(|h|{
-        let mut rows = vec![];
-        let blockhash = full_hash(&h.hash()[..]);
+    let mut hs = Vec::new();
 
-        rows.push(BlockRow::first_sync_header(h).into_row());
-        rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+    for v in header_entries.chunks(usize::max(header_entries.len()/NUM_THREAD,1)){
+        let v = v.to_owned();
+        let h = std::thread::spawn(move ||{ 
+            info!("spawn thread");
+            let mut rows = vec![];
+            v.into_iter().for_each(|h|{
+                let blockhash = full_hash(&h.hash()[..]);
+    
+                rows.push(BlockRow::first_sync_header(&h).into_row());
+                rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+            });
+    
+            rows
+        });
+        hs.push(h);
+    };
 
-        rows
-    })
-    .flatten()
-    .collect()
+    hs.into_iter().map(|h| h.join().unwrap()).flatten().collect()
+    // crate::new_index::fetch::POOL.install(||{
+    //     header_entries
+    //     .par_iter()
+    //     .map(|h|{
+    //         let mut rows = vec![];
+    //         let blockhash = full_hash(&h.hash()[..]);
+    
+    //         rows.push(BlockRow::first_sync_header(h).into_row());
+    //         rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+    
+    //         rows
+    //     })
+    //     .flatten()
+    //     .collect()
+    // })
 }
 
 fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRow> {
@@ -1387,26 +1453,26 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
     //      X{blockhash} → {txid1}...{txidN}
     //      M{blockhash} → {tx_count}{size}{weight}
     block_entries
-        .iter() // serialization is CPU-intensive
-        .map(|b| {
-            let mut rows = vec![];
-            let blockhash = full_hash(&b.entry.hash()[..]);
-            let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
-            for tx in &b.block.txdata {
-                add_transaction(tx, blockhash, &mut rows, iconfig);
-            }
+    .iter() // serialization is CPU-intensive
+    .map(|b| {
+        let mut rows = vec![];
+        let blockhash = full_hash(&b.entry.hash()[..]);
+        let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
+        for tx in &b.block.txdata {
+            add_transaction(tx, blockhash, &mut rows, iconfig);
+        }
 
-            if !iconfig.light_mode {
-                rows.push(BlockRow::new_txids(blockhash, &txids).into_row());
-                rows.push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
-            }
+        if !iconfig.light_mode {
+            rows.push(BlockRow::new_txids(blockhash, &txids).into_row());
+            rows.push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
+        }
 
-            rows.push(BlockRow::new_header(b).into_row());
-            rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
-            rows
-        })
-        .flatten()
-        .collect()
+        rows.push(BlockRow::new_header(b).into_row());
+        rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+        rows
+    })
+    .flatten()
+    .collect()
 }
 
 fn add_transaction(
@@ -1492,7 +1558,8 @@ fn index_blocks(
     previous_txos_map: &HashMap<OutPoint, TxOut>,
     iconfig: &IndexerConfig,
 ) -> Vec<DBRow> {
-    block_entries
+    //crate::new_index::fetch::POOL.install(||{
+        block_entries
         .iter() // serialization is CPU-intensive
         .map(|b| {
             let mut rows = vec![];
@@ -1512,6 +1579,7 @@ fn index_blocks(
         })
         .flatten()
         .collect()
+    //})
 }
 
 // TODO: return an iterator?
@@ -1759,7 +1827,7 @@ impl BlockRow {
         BlockRow {
             key: BlockKey {
                 code: b'b',
-                hash: full_hash(&header_entry.hash()),
+                hash: full_hash(&header_entry.hash()[..]),
             },
             value: serialize(&header_entry.header()),
         }
