@@ -227,6 +227,15 @@ fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<S
     )
 }
 
+lazy_static! {
+    static ref POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
+    .num_threads(0) // CPU-bound
+    .thread_name(|i| format!("parse-blocks-{}", i))
+    .build()
+    .unwrap();
+}
+
+
 fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     let mut cursor = Cursor::new(&blob);
     let mut slices = vec![];
@@ -264,12 +273,12 @@ fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         cursor.set_position(end);
     }
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(0) // CPU-bound
-        .thread_name(|i| format!("parse-blocks-{}", i))
-        .build()
-        .unwrap();
-    Ok(pool.install(|| {
+    // let pool = rayon::ThreadPoolBuilder::new()
+    //     .num_threads(0) // CPU-bound
+    //     .thread_name(|i| format!("parse-blocks-{}", i))
+    //     .build()
+    //     .unwrap();
+    Ok(POOL.install(|| {
         slices
             .into_iter()
             .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
@@ -322,13 +331,13 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         cursor.set_position(end);
     }
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(0) // CPU-bound
-        .thread_name(|i| format!("parse-blocks-{}", i))
-        .build()
-        .unwrap();
+    // let pool = rayon::ThreadPoolBuilder::new()
+    //     .num_threads(0) // CPU-bound
+    //     .thread_name(|i| format!("parse-blocks-{}", i))
+    //     .build()
+    //     .unwrap();
 
-    Ok(pool.install(|| {
+    Ok(POOL.install(|| {
         slices
             .into_iter()
             .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
