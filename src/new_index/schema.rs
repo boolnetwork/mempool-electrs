@@ -370,38 +370,23 @@ impl Indexer {
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
 
-        let to_adds = self.headers_to_add(&new_headers);
+        let to_add = self.headers_to_add(&new_headers);
         debug!(
             "adding transactions from {} blocks using {:?}",
-            to_adds.len(),
+            to_add.len(),
             self.from
         );
-
+        start_fetcher(self.from, &daemon, to_add)?.map(|blocks| { self.add(&blocks); drop(blocks);});
         self.start_auto_compactions(&self.store.txstore_db);
+
+        let to_index = self.headers_to_index(&new_headers);
+        debug!(
+            "indexing history from {} blocks using {:?}",
+            to_index.len(),
+            self.from
+        );
+        start_fetcher(self.from, &daemon, to_index)?.map(|blocks| { self.index(&blocks); drop(blocks);});
         self.start_auto_compactions(&self.store.history_db);
-
-        start_fetcher(self.from, &daemon, to_adds.to_vec())?
-        .map(|blocks|{ 
-            self.add(&blocks); 
-            self.index(&blocks);
-            if let DBFlush::Disable = self.flush {
-                debug!("flushing to disk");
-                self.store.txstore_db.flush();
-                self.store.history_db.flush();
-            }
-        });
-        
-        self.flush = DBFlush::Enable;
-
-        // let to_indexs = self.headers_to_index(&new_headers);
-        // debug!(
-        //     "indexing history from {} blocks using {:?}",
-        //     to_indexs.len(),
-        //     self.from
-        // );
-
-        // start_fetcher(self.from, &daemon, to_indexs.to_vec())?.map(|blocks| self.index(&blocks));
-        // self.start_auto_compactions(&self.store.history_db);
 
         if let DBFlush::Disable = self.flush {
             debug!("flushing to disk");
@@ -430,7 +415,7 @@ impl Indexer {
     fn add_sync_block_header(&self, headers: &[HeaderEntry]) {
         debug!("Adding {} blocks to SYNC headers", headers.len());
         let rows = add_sync_headers(headers, &self.iconfig);
-        for row in rows.chunks(50000){
+        for row  in rows.chunks(50000){
             debug!("Adding {} rows to SYNC headers", row.len());
             self.store.sync_db.write(row.to_vec(), DBFlush::Enable);
         }
@@ -455,7 +440,10 @@ impl Indexer {
         };
         {
             let _timer = self.start_timer("add_write");
-            self.store.txstore_db.write(rows, self.flush);
+            for row  in rows.chunks(50000) {
+                debug!("txstore_db.write");
+                self.store.txstore_db.write(row.to_vec(), self.flush);                
+            }
         }
 
         self.store
@@ -491,7 +479,10 @@ impl Indexer {
             }
             index_blocks(blocks, &previous_txos_map, &self.iconfig)
         };
-        self.store.history_db.write(rows, self.flush);
+        for row  in rows.chunks(50000) {
+            debug!("history_db.write");
+            self.store.history_db.write(row.to_vec(), self.flush);
+        }
     }
 }
 
@@ -1219,7 +1210,7 @@ impl ChainQuery {
     pub fn lookup_txns(&self, txids: &[(Txid, BlockId)]) -> Result<Vec<Transaction>> {
         let _timer = self.start_timer("lookup_txns");
         txids
-            .par_iter()
+            .iter()
             .map(|(txid, blockid)| {
                 self.lookup_txn(txid, Some(&blockid.hash))
                     .chain_err(|| "missing tx")
@@ -1381,7 +1372,7 @@ fn load_blockheaders(db: &DB) -> HashMap<BlockHash, BlockHeader> {
 
 fn add_sync_headers(header_entries: &[HeaderEntry], iconfig: &IndexerConfig) -> Vec<DBRow>  {
     header_entries
-    .par_iter()
+    .iter()
     .map(|h|{
         let mut rows = vec![];
         let blockhash = full_hash(&h.hash()[..]);
@@ -1405,7 +1396,7 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
     //      X{blockhash} → {txid1}...{txidN}
     //      M{blockhash} → {tx_count}{size}{weight}
     block_entries
-        .par_iter() // serialization is CPU-intensive
+        .iter() // serialization is CPU-intensive
         .map(|b| {
             let mut rows = vec![];
             let blockhash = full_hash(&b.entry.hash()[..]);
@@ -1484,7 +1475,7 @@ fn lookup_txos(
     };
     pool.install(|| {
         outpoints
-            .par_iter()
+            .iter()
             .filter_map(|outpoint| {
                 lookup_txo(txstore_db, outpoint)
                     .or_else(|| {
@@ -1511,7 +1502,7 @@ fn index_blocks(
     iconfig: &IndexerConfig,
 ) -> Vec<DBRow> {
     block_entries
-        .par_iter() // serialization is CPU-intensive
+        .iter() // serialization is CPU-intensive
         .map(|b| {
             let mut rows = vec![];
             for (idx, tx) in b.block.txdata.iter().enumerate() {
