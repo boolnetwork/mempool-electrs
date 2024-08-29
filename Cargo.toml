@@ -70,6 +70,7 @@ bitcoin-new = { package = "bitcoin", version = "0.30.1", features = ["rand"] }
 
 sgx-bool-registration-tool = { path = "./sgx-bool-registration-tool" }
 reqwest = { version = "0.11", default-features = false ,features = ["rustls-tls", "blocking"] }
+jemallocator = "0.5.4"
 
 byteorder = "1.5.0"
 

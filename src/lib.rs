@@ -32,3 +32,7 @@ pub mod reg;
 
 #[cfg(feature = "liquid")]
 pub mod elements;
+
+use jemallocator::Jemalloc;
+#[global_allocator]
+static ALLOC: Jemalloc = Jemalloc;
