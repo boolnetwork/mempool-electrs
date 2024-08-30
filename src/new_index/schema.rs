@@ -447,19 +447,20 @@ impl Indexer {
         // TODO: skip orphaned blocks?
         let rows: Vec<DBRow> = {
             let _timer = self.start_timer("add_process");
-            add_blocks(blocks, &self.iconfig)
-            // let mut hs = Vec::new();
+            //add_blocks(blocks, &self.iconfig)
+            let mut hs = Vec::new();
 
-            // for v in blocks.chunks(usize::max(blocks.len()/NUM_THREAD,1)){
-            //     let v: Vec<BlockEntry> = v.to_vec();
-            //     let iconfig = self.iconfig.clone();
-            //     let h = std::thread::spawn( move ||{ 
-            //         add_blocks(&v, &iconfig)
-            //     });
-            //     hs.push(h);
-            // };
+            for v in blocks.chunks(usize::max(blocks.len()/NUM_THREAD,1)){
+                let v: Vec<BlockEntry> = v.to_vec();
+                let iconfig = self.iconfig.clone();
+                let h = std::thread::spawn( move ||{ 
+                    debug!("add blocks spawn");
+                    add_blocks(&v, &iconfig)
+                });
+                hs.push(h);
+            };
         
-            // hs.into_iter().map(|h| h.join().unwrap()).flatten().collect()
+            hs.into_iter().map(|h| h.join().unwrap()).flatten().collect()
         };
         {
             let _timer = self.start_timer("add_write");
