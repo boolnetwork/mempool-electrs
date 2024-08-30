@@ -18,7 +18,8 @@ pub fn validate_tx_root(block: &Block, entry: &HeaderEntry){
     
     let sgx_txhashroot = entry.header().merkle_root;
     
-    assert_eq!(txhashroot, sgx_txhashroot, "Block tx hash root not match.");
+    assert_eq!(txhashroot, sgx_txhashroot, "Block tx hash root not match. blockhash {} header {}"
+            ,block.block_hash(), entry.hash());
 }
 
 pub fn filter_requests(method: &str) -> Option<Value>{
