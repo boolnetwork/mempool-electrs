@@ -228,13 +228,13 @@ fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<S
     )
 }
 
-lazy_static! {
-    pub static ref POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
-    .num_threads(3) // CPU-bound
-    .thread_name(|i| format!("parse-blocks-{}", i))
-    .build()
-    .unwrap();
-}
+// lazy_static! {
+//     pub static ref POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
+//     .num_threads(3) // CPU-bound
+//     .thread_name(|i| format!("parse-blocks-{}", i))
+//     .build()
+//     .unwrap();
+// }
 
 
 pub fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
@@ -279,12 +279,18 @@ pub fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     //     .thread_name(|i| format!("parse-blocks-{}", i))
     //     .build()
     //     .unwrap();
-    Ok(POOL.install(|| {
-        slices
-            .into_iter()
-            .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
-            .collect()
-    }))
+    let data: Vec<SizedBlock> = slices
+    .into_iter()
+    .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+    .collect();
+
+    Ok(data)
+    // Ok(POOL.install(|| {
+    //     slices
+    //         .into_iter()
+    //         .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+    //         .collect()
+    // }))
 }
 
 fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
@@ -337,13 +343,18 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     //     .thread_name(|i| format!("parse-blocks-{}", i))
     //     .build()
     //     .unwrap();
+    let data: Vec<SizedBlock> = slices
+    .into_iter()
+    .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+    .collect();
 
-    Ok(POOL.install(|| {
-        slices
-            .into_iter()
-            .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
-            .collect()
-    }))
+    Ok(data)
+    // Ok(POOL.install(|| {
+    //     slices
+    //         .into_iter()
+    //         .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+    //         .collect()
+    // }))
 }
 
 #[cfg(test)]
