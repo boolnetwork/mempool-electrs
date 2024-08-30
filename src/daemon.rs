@@ -26,15 +26,15 @@ use crate::util::HeaderList;
 use crate::errors::*;
 
 fn parse_hash<T>(value: &Value) -> Result<T>
-where
-    T: FromHex,
+    where
+        T: FromHex,
 {
     T::from_hex(
         value
             .as_str()
             .chain_err(|| format!("non-string value: {}", value))?,
     )
-    .chain_err(|| format!("non-hex value: {}", value))
+        .chain_err(|| format!("non-hex value: {}", value))
 }
 
 fn header_from_value(value: Value) -> Result<BlockHeader> {
@@ -207,21 +207,12 @@ impl Connection {
 
     fn send(&mut self, request: &str, network: Network) -> Result<()> {
         let cookie = &self.cookie_getter.get()?;
-        let msg = if network.eq(&Network::TBCRegtest) || network.eq(&Network::TBC) {
-            format!(
-                "POST / HTTP/1.0\nAuthorization: Basic {}\nContent-Length: {}\n\n{}",
-                base64::encode(cookie),
-                request.len(),
-                request,
-            )
-        }else {
-            format!(
-                "POST / HTTP/1.1\nAuthorization: Basic {}\nContent-Length: {}\n\n{}",
-                base64::encode(cookie),
-                request.len(),
-                request,
-            )
-        };
+        let msg = format!(
+            "POST / HTTP/1.1\nAuthorization: Basic {}\nContent-Length: {}\n\n{}",
+            base64::encode(cookie),
+            request.len(),
+            request,
+        );
         self.tx.write_all(msg.as_bytes()).chain_err(|| {
             ErrorKind::Connection("disconnected from daemon while sending".to_owned())
         })
@@ -258,23 +249,23 @@ impl Connection {
 
         let contents =
             contents.chain_err(|| ErrorKind::Connection("no reply from daemon".to_owned()))?;
-        // let contents_length: &str = headers
-        //     .get("Content-Length")
-        //     .chain_err(|| format!("Content-Length is missing: {:?}", headers))?;
-        // let contents_length: usize = contents_length
-        //     .parse()
-        //     .chain_err(|| format!("invalid Content-Length: {:?}", contents_length))?;
-        //
-        // let expected_length = contents_length - 1; // trailing EOL is skipped
-        // if expected_length != contents.len() {
-        //     bail!(ErrorKind::Connection(format!(
-        //         "expected {} bytes, got {}",
-        //         expected_length,
-        //         contents.len()
-        //     )));
-        // }
+        let contents_length: &str = headers
+            .get("Content-Length")
+            .chain_err(|| format!("Content-Length is missing: {:?}", headers))?;
+        let contents_length: usize = contents_length
+            .parse()
+            .chain_err(|| format!("invalid Content-Length: {:?}", contents_length))?;
 
-        Ok(if status == "HTTP/1.0 200 OK" {
+        let expected_length = contents_length - 1; // trailing EOL is skipped
+        if expected_length != contents.len() {
+            bail!(ErrorKind::Connection(format!(
+                "expected {} bytes, got {}",
+                expected_length,
+                contents.len()
+            )));
+        }
+
+        Ok(if status == "HTTP/1.1 200 OK" {
             contents
         } else if status == "HTTP/1.1 500 Internal Server Error" {
             warn!("HTTP status: {}", status);
@@ -595,7 +586,15 @@ impl Daemon {
 
     fn getmempoolinfo(&self) -> Result<MempoolInfo> {
         let info: Value = self.request("getmempoolinfo", json!([]))?;
-        from_value(info).chain_err(|| "invalid mempool info")
+        if self.network().ne(&Network::TBC) && self.network().ne(&Network::TBCRegtest) {
+            from_value(info).chain_err(|| "invalid mempool info")
+        } else {
+            Ok(
+                MempoolInfo {
+                    loaded: true,
+                }
+            )
+        }
     }
 
     fn getnetworkinfo(&self) -> Result<NetworkInfo> {
