@@ -94,9 +94,10 @@ impl HeaderList {
         while blockhash != null_hash {
             let header = headers_map.remove(&blockhash).unwrap_or_else(|| {
                 panic!(
-                    "missing expected blockhash in headers map: {:?}, pointed from: {:?}",
+                    "missing expected blockhash in headers map: {:?}, pointed from: {:?}, header {:?}",
                     blockhash,
-                    headers_chain.last().map(|h| h.block_hash())
+                    headers_chain.last().map(|h| h.block_hash()),
+                    headers_chain.last()
                 )
             });
             blockhash = header.prev_blockhash;
