@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Lines, Write};
+use std::io::{BufRead, BufReader, Cursor, Lines, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -282,49 +282,73 @@ impl Connection {
 
     fn recv_tbc(&mut self) -> Result<String> {
         // TODO: use proper HTTP parser.
-        let mut in_header = true;
-        let mut contents: Option<String> = None;
+        let mut contents = String::new();
         let iter = self.rx.by_ref();
-        let status = iter
-            .next()
-            .chain_err(|| {
+        let mut status = None;
+        while let Some(line_result) = iter.next() {
+            let line = line_result.chain_err(|| {
                 ErrorKind::Connection("disconnected from daemon while receiving".to_owned())
-            })?
-            .chain_err(|| ErrorKind::Connection("failed to read status".to_owned()))?;
+            })?;
+            if !line.is_empty() {
+                status = Some(line);
+                break;
+            }
+        }
+
+        let status = status.ok_or_else(|| {
+            ErrorKind::Connection("failed to read status, no valid status line found".to_owned())
+        })?;
+
         let mut headers = HashMap::new();
-        for line in iter {
+        for line in &mut *iter {
             let line = line.chain_err(|| ErrorKind::Connection("failed to read".to_owned()))?;
             if line.is_empty() {
-                in_header = false; // next line should contain the actual response.
-            } else if in_header {
+                break;
+            } else {
                 let parts: Vec<&str> = line.splitn(2, ": ").collect();
                 if parts.len() == 2 {
                     headers.insert(parts[0].to_owned(), parts[1].to_owned());
                 } else {
                     warn!("invalid header: {:?}", line);
                 }
-            } else {
-                contents = Some(line);
-                break;
             }
         }
 
-        let contents =
-            contents.chain_err(|| ErrorKind::Connection("no reply from daemon".to_owned()))?;
-        let contents_length: &str = headers
-            .get("Content-Length")
-            .chain_err(|| format!("Content-Length is missing: {:?}", headers))?;
-        let contents_length: usize = contents_length
-            .parse()
-            .chain_err(|| format!("invalid Content-Length: {:?}", contents_length))?;
+        if headers.get("Transfer-Encoding")
+            .chain_err(|| format!("Transfer-Encoding is missing: {:?}", headers))?
+            .eq("chunked")
+        {
+            while let Some(Ok(size_str)) = iter.next() {
+                if size_str.is_empty() {
+                    continue;
+                }
+                let chunk_size = usize::from_str_radix(&size_str, 16)
+                    .chain_err(|| format!("invalid chunk size: {:?}", size_str))?;
+                if chunk_size == 0 {
+                    break;
+                }
 
-        let expected_length = contents_length - 1; // trailing EOL is skipped
-        if expected_length != contents.len() {
-            bail!(ErrorKind::Connection(format!(
-                "expected {} bytes, got {}",
-                expected_length,
-                contents.len()
-            )));
+                let mut chunk_data = String::new();
+                let mut bytes_remaining = chunk_size;
+                while bytes_remaining > 0 {
+                    if let Some(Ok(content)) = iter.next() {
+                        let content_length = content.len();
+                        if content_length <= bytes_remaining {
+                            chunk_data.push_str(&content);
+                            bytes_remaining -= content_length.max(1);
+                        } else {
+                            chunk_data.push_str(&content[0..bytes_remaining]);
+                            break;
+                        }
+                    } else {
+                        bail!(ErrorKind::Connection("failed to read chunk data".to_string()));
+                    }
+                }
+
+                contents.push_str(&chunk_data);
+            }
+        }else {
+            bail!(format!("invalid response header {:?}", headers));
         }
 
         Ok(if status == "HTTP/1.1 200 OK" {
@@ -489,7 +513,11 @@ impl Daemon {
         self.size
             .with_label_values(&[method, "send"])
             .observe(request.len() as f64);
-        let response = conn.recv()?;
+        let response = if self.network().eq(&Network::TBCRegtest) || self.network().eq(&Network::TBC) {
+            conn.recv_tbc()?
+        }else {
+            conn.recv()?
+        };
         let result: Value = from_str(&response).chain_err(|| "invalid JSON")?;
         timer.observe_duration();
         self.size
