@@ -24,6 +24,7 @@ pub use bitcoin::network::constants::Network as BNetwork;
 
 #[cfg(not(feature = "liquid"))]
 pub type Value = u64;
+
 #[cfg(feature = "liquid")]
 pub use confidential::Value;
 
@@ -37,6 +38,10 @@ pub enum Network {
     Testnet4,
     #[cfg(not(feature = "liquid"))]
     Fractal,
+    #[cfg(not(feature = "liquid"))]
+    TBC,
+    #[cfg(not(feature = "liquid"))]
+    TBCRegtest,
     #[cfg(not(feature = "liquid"))]
     Regtest,
     #[cfg(not(feature = "liquid"))]
@@ -122,6 +127,8 @@ impl Network {
             "testnet".to_string(),
             "testnet4".to_string(),
             "fractal".to_string(),
+            "tbc".to_string(),
+            "tbcregtest".to_string(),
             "regtest".to_string(),
             "signet".to_string(),
         ];
@@ -165,6 +172,8 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
         Network::Testnet => *TESTNET_GENESIS,
         Network::Testnet4 => *TESTNET4_GENESIS,
         Network::Fractal => *FRACTAL_GENESIS,
+        Network::TBC => *BITCOIN_GENESIS,
+        Network::TBCRegtest => *REGTEST_GENESIS,
         Network::Regtest => *REGTEST_GENESIS,
         Network::Signet => *SIGNET_GENESIS,
     }
@@ -206,6 +215,10 @@ impl From<&str> for Network {
             #[cfg(not(feature = "liquid"))]
             "fractal" => Network::Fractal,
             #[cfg(not(feature = "liquid"))]
+            "tbc" => Network::TBCRegtest,
+            #[cfg(not(feature = "liquid"))]
+            "tbcregtest" => Network::TBCRegtest,
+            #[cfg(not(feature = "liquid"))]
             "regtest" => Network::Regtest,
             #[cfg(not(feature = "liquid"))]
             "signet" => Network::Signet,
@@ -230,7 +243,9 @@ impl From<Network> for BNetwork {
             Network::Testnet => BNetwork::Testnet,
             Network::Testnet4 => BNetwork::Testnet,
             Network::Fractal => BNetwork::Bitcoin,
+            Network::TBC => BNetwork::Bitcoin,
             Network::Regtest => BNetwork::Regtest,
+            Network::TBCRegtest => BNetwork::Regtest,
             Network::Signet => BNetwork::Signet,
         }
     }

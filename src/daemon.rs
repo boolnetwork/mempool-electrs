@@ -205,20 +205,91 @@ impl Connection {
         Connection::new(self.addr, self.cookie_getter.clone(), self.signal.clone())
     }
 
-    fn send(&mut self, request: &str) -> Result<()> {
+    fn send(&mut self, request: &str, network: Network) -> Result<()> {
         let cookie = &self.cookie_getter.get()?;
-        let msg = format!(
-            "POST / HTTP/1.1\nAuthorization: Basic {}\nContent-Length: {}\n\n{}",
-            base64::encode(cookie),
-            request.len(),
-            request,
-        );
+        let msg = if network.eq(&Network::TBCRegtest) || network.eq(&Network::TBC) {
+            format!(
+                "POST / HTTP/1.0\nAuthorization: Basic {}\nContent-Length: {}\n\n{}",
+                base64::encode(cookie),
+                request.len(),
+                request,
+            )
+        }else {
+            format!(
+                "POST / HTTP/1.1\nAuthorization: Basic {}\nContent-Length: {}\n\n{}",
+                base64::encode(cookie),
+                request.len(),
+                request,
+            )
+        };
         self.tx.write_all(msg.as_bytes()).chain_err(|| {
             ErrorKind::Connection("disconnected from daemon while sending".to_owned())
         })
     }
 
     fn recv(&mut self) -> Result<String> {
+        // TODO: use proper HTTP parser.
+        let mut in_header = true;
+        let mut contents: Option<String> = None;
+        let iter = self.rx.by_ref();
+        let status = iter
+            .next()
+            .chain_err(|| {
+                ErrorKind::Connection("disconnected from daemon while receiving".to_owned())
+            })?
+            .chain_err(|| ErrorKind::Connection("failed to read status".to_owned()))?;
+        let mut headers = HashMap::new();
+        for line in iter {
+            let line = line.chain_err(|| ErrorKind::Connection("failed to read".to_owned()))?;
+            if line.is_empty() {
+                in_header = false; // next line should contain the actual response.
+            } else if in_header {
+                let parts: Vec<&str> = line.splitn(2, ": ").collect();
+                if parts.len() == 2 {
+                    headers.insert(parts[0].to_owned(), parts[1].to_owned());
+                } else {
+                    warn!("invalid header: {:?}", line);
+                }
+            } else {
+                contents = Some(line);
+                break;
+            }
+        }
+
+        let contents =
+            contents.chain_err(|| ErrorKind::Connection("no reply from daemon".to_owned()))?;
+        // let contents_length: &str = headers
+        //     .get("Content-Length")
+        //     .chain_err(|| format!("Content-Length is missing: {:?}", headers))?;
+        // let contents_length: usize = contents_length
+        //     .parse()
+        //     .chain_err(|| format!("invalid Content-Length: {:?}", contents_length))?;
+        //
+        // let expected_length = contents_length - 1; // trailing EOL is skipped
+        // if expected_length != contents.len() {
+        //     bail!(ErrorKind::Connection(format!(
+        //         "expected {} bytes, got {}",
+        //         expected_length,
+        //         contents.len()
+        //     )));
+        // }
+
+        Ok(if status == "HTTP/1.0 200 OK" {
+            contents
+        } else if status == "HTTP/1.1 500 Internal Server Error" {
+            warn!("HTTP status: {}", status);
+            contents // the contents should have a JSONRPC error field
+        } else {
+            bail!(
+                "request failed {:?}: {:?} = {:?}",
+                status,
+                headers,
+                contents
+            );
+        })
+    }
+
+    fn recv_tbc(&mut self) -> Result<String> {
         // TODO: use proper HTTP parser.
         let mut in_header = true;
         let mut contents: Option<String> = None;
@@ -423,7 +494,7 @@ impl Daemon {
         let mut conn = self.conn.lock().unwrap();
         let timer = self.latency.with_label_values(&[method]).start_timer();
         let request = request.to_string();
-        conn.send(&request)?;
+        conn.send(&request, self.network())?;
         self.size
             .with_label_values(&[method, "send"])
             .observe(request.len() as f64);

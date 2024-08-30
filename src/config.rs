@@ -357,11 +357,11 @@ impl Config {
 
         let default_daemon_port = match network_type {
             #[cfg(not(feature = "liquid"))]
-            Network::Bitcoin => 8332,
+            Network::Bitcoin | Network::TBC  => 8332,
             #[cfg(not(feature = "liquid"))]
             Network::Testnet => 18332,
             #[cfg(not(feature = "liquid"))]
-            Network::Regtest => 18443,
+            Network::Regtest | Network::TBCRegtest => 18443,
             #[cfg(not(feature = "liquid"))]
             Network::Signet => 38332,
             #[cfg(not(feature = "liquid"))]
@@ -384,7 +384,11 @@ impl Config {
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 40002,
             #[cfg(not(feature = "liquid"))]
+            Network::TBC => 40003,
+            #[cfg(not(feature = "liquid"))]
             Network::Regtest => 60401,
+            #[cfg(not(feature = "liquid"))]
+            Network::TBCRegtest => 60402,
             #[cfg(not(feature = "liquid"))]
             Network::Signet => 60601,
 
@@ -408,6 +412,10 @@ impl Config {
             Network::Testnet4 => 3004,
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 3005,
+            #[cfg(not(feature = "liquid"))]
+            Network::TBC => 3006,
+            #[cfg(not(feature = "liquid"))]
+            Network::TBCRegtest => 3007,
 
             #[cfg(feature = "liquid")]
             Network::Liquid => 3000,
@@ -427,6 +435,10 @@ impl Config {
             Network::Testnet4 => 44224,
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 45224,
+            #[cfg(not(feature = "liquid"))]
+            Network::TBC => 46224,
+            #[cfg(not(feature = "liquid"))]
+            Network::TBCRegtest => 54225,
             #[cfg(not(feature = "liquid"))]
             Network::Signet => 54224,
 
@@ -480,7 +492,11 @@ impl Config {
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => (),
             #[cfg(not(feature = "liquid"))]
+            Network::TBC => (),
+            #[cfg(not(feature = "liquid"))]
             Network::Regtest => daemon_dir.push("regtest"),
+            #[cfg(not(feature = "liquid"))]
+            Network::TBCRegtest => daemon_dir.push("regtest"),
             #[cfg(not(feature = "liquid"))]
             Network::Signet => daemon_dir.push("signet"),
 
