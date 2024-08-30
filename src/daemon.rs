@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Cursor, Lines, Write};
+use std::io::{BufRead, BufReader, Lines, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -205,7 +205,7 @@ impl Connection {
         Connection::new(self.addr, self.cookie_getter.clone(), self.signal.clone())
     }
 
-    fn send(&mut self, request: &str, network: Network) -> Result<()> {
+    fn send(&mut self, request: &str) -> Result<()> {
         let cookie = &self.cookie_getter.get()?;
         let msg = format!(
             "POST / HTTP/1.1\nAuthorization: Basic {}\nContent-Length: {}\n\n{}",
@@ -509,7 +509,7 @@ impl Daemon {
         let mut conn = self.conn.lock().unwrap();
         let timer = self.latency.with_label_values(&[method]).start_timer();
         let request = request.to_string();
-        conn.send(&request, self.network())?;
+        conn.send(&request)?;
         self.size
             .with_label_values(&[method, "send"])
             .observe(request.len() as f64);
