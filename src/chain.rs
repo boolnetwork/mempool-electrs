@@ -38,6 +38,8 @@ pub enum Network {
     #[cfg(not(feature = "liquid"))]
     Fractal,
     #[cfg(not(feature = "liquid"))]
+    FractalTestnet,
+    #[cfg(not(feature = "liquid"))]
     Regtest,
     #[cfg(not(feature = "liquid"))]
     Signet,
@@ -65,7 +67,8 @@ impl Network {
         match self {
             // hexdump -C -n 293 blk00000.dat [0x1C, 0x16, 0x3F, 0x28]
             Network::Testnet4 => 0x283F161C,
-            Network::Fractal => 0xE8ADA3C8,
+            Network::Fractal => 0xD99E94B9,
+            Network::FractalTestnet => 0xE8ADA3C8,
             _ => BNetwork::from(self).magic(),
         }
     }
@@ -152,7 +155,11 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
             "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043"
         )
         .unwrap();
-        static ref FRACTAL_GENESIS: bitcoin::BlockHash =
+        static ref FRACTAL_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
+            "00000000000000005a5c13fe33f6717c7ad81fc8837ae75e4693c16acbdd0f66"
+        )
+        .unwrap();
+        static ref FRACTAL_TESTNET_GENESIS: bitcoin::BlockHash =
             genesis_block(BNetwork::Bitcoin).block_hash();
         static ref REGTEST_GENESIS: bitcoin::BlockHash =
             genesis_block(BNetwork::Regtest).block_hash();
@@ -164,6 +171,7 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
         Network::Bitcoin => *BITCOIN_GENESIS,
         Network::Testnet => *TESTNET_GENESIS,
         Network::Testnet4 => *TESTNET4_GENESIS,
+        Network::FractalTestnet => *FRACTAL_TESTNET_GENESIS,
         Network::Fractal => *FRACTAL_GENESIS,
         Network::Regtest => *REGTEST_GENESIS,
         Network::Signet => *SIGNET_GENESIS,
@@ -206,6 +214,8 @@ impl From<&str> for Network {
             #[cfg(not(feature = "liquid"))]
             "fractal" => Network::Fractal,
             #[cfg(not(feature = "liquid"))]
+            "fractal_testnet" => Network::FractalTestnet,
+            #[cfg(not(feature = "liquid"))]
             "regtest" => Network::Regtest,
             #[cfg(not(feature = "liquid"))]
             "signet" => Network::Signet,
@@ -230,6 +240,7 @@ impl From<Network> for BNetwork {
             Network::Testnet => BNetwork::Testnet,
             Network::Testnet4 => BNetwork::Testnet,
             Network::Fractal => BNetwork::Bitcoin,
+            Network::FractalTestnet => BNetwork::Bitcoin,
             Network::Regtest => BNetwork::Regtest,
             Network::Signet => BNetwork::Signet,
         }
