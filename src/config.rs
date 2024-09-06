@@ -368,6 +368,8 @@ impl Config {
             Network::Testnet4 => 48332,
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 58332,
+            #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => 58333,
 
             #[cfg(feature = "liquid")]
             Network::Liquid => 7041,
@@ -383,6 +385,8 @@ impl Config {
             Network::Testnet4 => 40001,
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 40002,
+            #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => 40003,
             #[cfg(not(feature = "liquid"))]
             Network::Regtest => 60401,
             #[cfg(not(feature = "liquid"))]
@@ -408,6 +412,8 @@ impl Config {
             Network::Testnet4 => 3004,
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 3005,
+            #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => 3006,
 
             #[cfg(feature = "liquid")]
             Network::Liquid => 3000,
@@ -427,6 +433,8 @@ impl Config {
             Network::Testnet4 => 44224,
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 45224,
+            #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => 45225,
             #[cfg(not(feature = "liquid"))]
             Network::Signet => 54224,
 
@@ -478,7 +486,9 @@ impl Config {
             #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => daemon_dir.push("testnet4"),
             #[cfg(not(feature = "liquid"))]
-            Network::Fractal => (),
+            Network::Fractal => daemon_dir.push("fractal"),
+            #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => daemon_dir.push("fractal_testnet"),
             #[cfg(not(feature = "liquid"))]
             Network::Regtest => daemon_dir.push("regtest"),
             #[cfg(not(feature = "liquid"))]
