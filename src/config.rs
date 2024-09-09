@@ -480,15 +480,11 @@ impl Config {
             });
         match network_type {
             #[cfg(not(feature = "liquid"))]
-            Network::Bitcoin => (),
+            Network::Bitcoin | Network::Fractal | Network::FractalTestnet=> (),
             #[cfg(not(feature = "liquid"))]
             Network::Testnet => daemon_dir.push("testnet3"),
             #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => daemon_dir.push("testnet4"),
-            #[cfg(not(feature = "liquid"))]
-            Network::Fractal => daemon_dir.push("fractal"),
-            #[cfg(not(feature = "liquid"))]
-            Network::FractalTestnet => daemon_dir.push("fractal_testnet"),
             #[cfg(not(feature = "liquid"))]
             Network::Regtest => daemon_dir.push("regtest"),
             #[cfg(not(feature = "liquid"))]
