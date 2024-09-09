@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::{fs, u32, u8};
 
-use crate::chain::Network::Fractal;
+use crate::chain::Network::{Fractal, FractalTestnet};
 use crate::chain::{Block, BlockHash};
 use crate::daemon::Daemon;
 use crate::errors::*;
@@ -81,7 +81,7 @@ fn bitcoind_fetcher(
             for entries in new_headers.chunks(100) {
                 let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
                 let blocks = match daemon.network() {
-                    Fractal => daemon
+                    Fractal | FractalTestnet => daemon
                         .get_fractal_bocks(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                     _ => daemon
@@ -120,7 +120,7 @@ fn blkfiles_fetcher(
     let mut entry_map: HashMap<BlockHash, HeaderEntry> =
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
-    let parser = if daemon.network().eq(&Fractal) {
+    let parser = if daemon.network().eq(&Fractal) ||  daemon.network().eq(&FractalTestnet) {
         blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
     } else {
         blkfiles_parser(blkfiles_reader(blk_files), magic)
