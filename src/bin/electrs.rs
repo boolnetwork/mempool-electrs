@@ -62,7 +62,12 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         &config,
         &metrics,
     );
-    let mut tip = indexer.update(&daemon)?;
+
+    let mut tip = if config.sgx_enable {
+        indexer.sgx_update(&daemon)?
+    }else {
+        indexer.update(&daemon)?
+    };
 
     let chain = Arc::new(ChainQuery::new(
         Arc::clone(&store),
@@ -144,7 +149,11 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         // Index new blocks
         let current_tip = daemon.getbestblockhash()?;
         if current_tip != tip {
-            indexer.update(&daemon)?;
+            if config.sgx_enable {
+                indexer.sgx_update(&daemon)?;
+            }else {
+                indexer.update(&daemon)?;
+            }
             tip = current_tip;
         };
 
@@ -165,7 +174,16 @@ fn run_server(config: Arc<Config>) -> Result<()> {
 }
 
 fn register_to_bool(config: Arc<Config>) -> Result<()> {
-    if config.sgx_enable {
+    if config.sgx_test {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            sgx_bool_registration_tool::register_sgx_test().await;
+            let pk = hex::decode(&config.relate_device_id_test).unwrap();
+            let mut list = sgx_bool_registration_tool::RELATEDEVICEIDS.read().unwrap().clone().unwrap();
+            list.push(pk);
+            *sgx_bool_registration_tool::RELATEDEVICEIDS.write().unwrap() = Some(list);
+        });
+    }else {
         electrs::util::spawn_thread("register", move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
@@ -177,18 +195,9 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
                     config.watcher_device_id.clone(),
                     2u16
                 )
-                .await;
+                    .await;
                 std::thread::park();
             });
-        });
-    } else {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            sgx_bool_registration_tool::register_sgx_test().await;
-            let pk = hex::decode(&config.relate_device_id_test).unwrap();
-            let mut list = sgx_bool_registration_tool::RELATEDEVICEIDS.read().unwrap().clone().unwrap();
-            list.push(pk);
-            *sgx_bool_registration_tool::RELATEDEVICEIDS.write().unwrap() = Some(list);
         });
     }
     std::thread::sleep(std::time::Duration::from_secs(8));
@@ -197,10 +206,13 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
 
 fn main() {
     let config = Arc::new(Config::from_args());
-    if let Err(e) = register_to_bool(config.clone()) {
-        error!("register failed: {}", e.display_chain());
-        process::exit(1);
+    if config.sgx_enable {
+        if let Err(e) = register_to_bool(config.clone()) {
+            error!("register failed: {}", e.display_chain());
+            process::exit(1);
+        }
     }
+
     if let Err(e) = run_server(config) {
         error!("server failed: {}", e.display_chain());
         process::exit(1);
