@@ -1,5 +1,3 @@
-use rayon::prelude::*;
-
 #[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, Decodable};
 #[cfg(feature = "liquid")]
@@ -96,15 +94,11 @@ fn bitcoind_fetcher(
                 let block_entries: Vec<BlockEntry> = blocks
                     .into_iter()
                     .zip(entries)
-                    .map(|(block, entry)| {
-
-                        crate::reg::validate_tx_root(&block, entry);
-
-                    BlockEntry {
+                    .map(|(block, entry)| BlockEntry {
                         entry: entry.clone(), // TODO: remove this clone()
                         size: block.size() as u32,
                         block,
-                    }})
+                    })
                     .collect();
                 assert_eq!(block_entries.len(), entries.len());
                 sender
@@ -137,31 +131,25 @@ fn blkfiles_fetcher(
     Ok(Fetcher::from(
         chan.into_receiver(),
         spawn_thread("blkfiles_fetcher", move || {
-                parser.map(|sizedblocks| {
-                    let block_entries: Vec<BlockEntry> = sizedblocks
-                        .into_iter()
-                        .filter_map(|(block, size)| {
-                            let blockhash = block.block_hash();
-
-                            if entry_map.get(&blockhash).is_some() {
-                                crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
-                                entry_map
-                                .remove(&blockhash)
-                                .map(|entry|{
-                                    BlockEntry { block, entry, size }})
-                            } else {
+            parser.map(|sizedblocks| {
+                let block_entries: Vec<BlockEntry> = sizedblocks
+                    .into_iter()
+                    .filter_map(|(block, size)| {
+                        let blockhash = block.block_hash();
+                        entry_map
+                            .remove(&blockhash)
+                            .map(|entry| BlockEntry { block, entry, size })
+                            .or_else(|| {
                                 trace!("skipping block {}", blockhash);
                                 None
-                            }
-
-                        })
-                        .collect();
-                    trace!("fetched {} blocks", block_entries.len());
-                    sender
-                        .send(block_entries)
-                        .expect("failed to send blocks entries from blk*.dat files");
-                });
-
+                            })
+                    })
+                    .collect();
+                trace!("fetched {} blocks", block_entries.len());
+                sender
+                    .send(block_entries)
+                    .expect("failed to send blocks entries from blk*.dat files");
+            });
             if !entry_map.is_empty() {
                 panic!(
                     "failed to index {} blocks from blk*.dat files",
@@ -227,15 +215,6 @@ fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<S
         }),
     )
 }
-
-// lazy_static! {
-//     pub static ref POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
-//     .num_threads(3) // CPU-bound
-//     .thread_name(|i| format!("parse-blocks-{}", i))
-//     .build()
-//     .unwrap();
-// }
-
 
 pub fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     let mut cursor = Cursor::new(&blob);
