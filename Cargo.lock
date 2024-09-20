@@ -2930,7 +2930,7 @@ dependencies = [
 
 [[package]]
 name = "mempool-electrs"
-version = "3.0.3"
+version = "3.0.5"
 dependencies = [
  "arrayref",
  "base64 0.13.0",

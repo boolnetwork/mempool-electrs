@@ -304,6 +304,7 @@ pub struct Daemon {
     daemon_dir: PathBuf,
     blocks_dir: PathBuf,
     network: Network,
+    sgx_enable: bool,
     magic: Option<u32>,
     conn: Mutex<Connection>,
     message_id: Counter,
@@ -323,6 +324,7 @@ impl Daemon {
         daemon_rpc_addr: SocketAddr,
         cookie_getter: Arc<dyn CookieGetter>,
         network: Network,
+        sgx_enable: bool,
         magic: Option<u32>,
         signal: Waiter,
         metrics: &Metrics,
@@ -331,6 +333,7 @@ impl Daemon {
             daemon_dir,
             blocks_dir,
             network,
+            sgx_enable,
             magic,
             conn: Mutex::new(Connection::new(
                 daemon_rpc_addr,
@@ -398,6 +401,7 @@ impl Daemon {
             daemon_dir: self.daemon_dir.clone(),
             blocks_dir: self.blocks_dir.clone(),
             network: self.network,
+            sgx_enable: self.sgx_enable,
             magic: self.magic,
             conn: Mutex::new(self.conn.lock().unwrap().reconnect()?),
             message_id: Counter::new(),
@@ -477,8 +481,11 @@ impl Daemon {
 
         for chunk in &chunks {
             let reqs = chunk.collect();
-            //let mut replies = self.call_jsonrpc(method, &reqs)?;
-            let mut replies = self.send_req(&reqs).map_err(|e| format!("{e:?}"))?;
+            let mut replies = if self.sgx_enable {
+                self.send_req(&reqs).map_err(|e| format!("{e:?}"))?
+            }else {
+                self.call_jsonrpc(method, &reqs)?
+            };
             if let Some(replies_vec) = replies.as_array_mut() {
                 for reply in replies_vec {
                     n += 1;
