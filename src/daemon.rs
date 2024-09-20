@@ -17,7 +17,7 @@ use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
 
-use crate::chain::Network::Fractal;
+use crate::chain::Network::{Fractal, FractalTestnet};
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
 use crate::signal::Waiter;
@@ -350,12 +350,18 @@ impl Daemon {
         };
         let network_info = daemon.getnetworkinfo()?;
         info!("{:?}", network_info);
-        if network_info.version < 16_00_00 {
-            bail!(
+        match daemon.network {
+            Fractal | FractalTestnet => {}
+            _ => {
+                if network_info.version < 16_00_00 {
+                    bail!(
                 "{} is not supported - please use bitcoind 0.16+",
                 network_info.subversion,
             )
+                }
+            }
         }
+
         let blockchain_info = daemon.getblockchaininfo()?;
         info!("{:?}", blockchain_info);
         if blockchain_info.pruned {
@@ -562,7 +568,7 @@ impl Daemon {
     }
 
     pub fn getblockheader(&self, blockhash: &BlockHash) -> Result<BlockHeader> {
-        if self.network.eq(&Fractal) {
+        if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
             header_from_value_fractal(self.request(
                 "getblockheader",
                 json!([blockhash.to_hex(), /*verbose=*/ false]),
@@ -584,7 +590,7 @@ impl Daemon {
             .collect();
         let mut result = vec![];
         for h in self.requests("getblockheader", &params_list)? {
-            if self.network.eq(&Fractal) {
+            if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
                 result.push(header_from_value_fractal(h)?);
             } else {
                 result.push(header_from_value(h)?);

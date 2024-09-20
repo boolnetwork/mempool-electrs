@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::{fs, u32, u8};
 
-use crate::chain::Network::Fractal;
+use crate::chain::Network::{Fractal, FractalTestnet};
 use crate::chain::{Block, BlockHash};
 use crate::daemon::Daemon;
 use crate::errors::*;
@@ -85,7 +85,7 @@ fn bitcoind_fetcher(
             for entries in new_headers.chunks(100) {
                 let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
                 let blocks = match daemon.network() {
-                    Fractal => daemon
+                    Fractal | FractalTestnet => daemon
                         .get_fractal_bocks(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                     _ => daemon
@@ -97,9 +97,9 @@ fn bitcoind_fetcher(
                     .into_iter()
                     .zip(entries)
                     .map(|(block, entry)| {
-                    
+
                         crate::reg::validate_tx_root(&block, entry);
-                    
+
                     BlockEntry {
                         entry: entry.clone(), // TODO: remove this clone()
                         size: block.size() as u32,
@@ -128,11 +128,11 @@ fn blkfiles_fetcher(
     let mut entry_map: HashMap<BlockHash, HeaderEntry> =
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
-    let parser = if daemon.network().eq(&Fractal) {
-            blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
-        } else {
-            blkfiles_parser(blkfiles_reader(blk_files), magic)
-        };
+    let parser = if daemon.network().eq(&Fractal) ||  daemon.network().eq(&FractalTestnet) {
+        blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
+    } else {
+        blkfiles_parser(blkfiles_reader(blk_files), magic)
+    };
 
     Ok(Fetcher::from(
         chan.into_receiver(),
@@ -144,16 +144,16 @@ fn blkfiles_fetcher(
                             let blockhash = block.block_hash();
 
                             if entry_map.get(&blockhash).is_some() {
-                                crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);  
+                                crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
                                 entry_map
                                 .remove(&blockhash)
                                 .map(|entry|{
-                                    BlockEntry { block, entry, size }})  
+                                    BlockEntry { block, entry, size }})
                             } else {
                                 trace!("skipping block {}", blockhash);
                                 None
                             }
-                            
+
                         })
                         .collect();
                     trace!("fetched {} blocks", block_entries.len());
@@ -279,18 +279,19 @@ pub fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     //     .thread_name(|i| format!("parse-blocks-{}", i))
     //     .build()
     //     .unwrap();
-    let data: Vec<SizedBlock> = slices
-    .into_iter()
-    .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
-    .collect();
-
-    Ok(data)
-    // Ok(POOL.install(|| {
+    // Ok(pool.install(|| {
     //     slices
-    //         .into_iter()
-    //         .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+    //         .into_par_iter()
+    //         .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
     //         .collect()
     // }))
+
+    let data: Vec<SizedBlock> = slices
+        .into_iter()
+        .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+        .collect();
+
+    Ok(data)
 }
 
 fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
@@ -343,18 +344,20 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     //     .thread_name(|i| format!("parse-blocks-{}", i))
     //     .build()
     //     .unwrap();
-    let data: Vec<SizedBlock> = slices
-    .into_iter()
-    .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
-    .collect();
-
-    Ok(data)
-    // Ok(POOL.install(|| {
+    //
+    // Ok(pool.install(|| {
     //     slices
-    //         .into_iter()
+    //         .into_par_iter()
     //         .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
     //         .collect()
     // }))
+
+    let data: Vec<SizedBlock> = slices
+        .into_iter()
+        .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+        .collect();
+
+    Ok(data)
 }
 
 #[cfg(test)]
