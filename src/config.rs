@@ -71,6 +71,7 @@ pub struct Config {
     pub watcher_device_id: String,
     pub relate_device_id_test: String,
     pub sgx_enable: bool,
+    pub sgx_test: bool,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
@@ -642,6 +643,7 @@ impl Config {
             watcher_device_id: watcher_device_id.to_string(),
             relate_device_id_test: relate_device_id_test.to_string(),
             sgx_enable: m.is_present("sgx_enable"),
+            sgx_test: m.is_present("sgx_test"),
 
             #[cfg(feature = "liquid")]
             parent_network,

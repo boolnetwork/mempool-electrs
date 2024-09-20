@@ -122,8 +122,8 @@ pub fn add_blocks(indexer: &crate::new_index::schema::Indexer, daemon: &crate::d
                 
             })
             .collect();
-        
-        indexer.add(&block_entries);
+
+        indexer.sgx_add(&block_entries);
     }
 
     if !entry_map.is_empty() {

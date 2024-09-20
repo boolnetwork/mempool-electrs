@@ -185,7 +185,6 @@ struct IndexerConfig {
     address_search: bool,
     index_unspendables: bool,
     network: Network,
-    sgx_enable: bool,
     #[cfg(feature = "liquid")]
     parent_network: crate::chain::BNetwork,
 }
@@ -197,7 +196,6 @@ impl From<&Config> for IndexerConfig {
             address_search: config.address_search,
             index_unspendables: config.index_unspendables,
             network: config.network_type,
-            sgx_enable: config.sgx_enable,
             #[cfg(feature = "liquid")]
             parent_network: config.parent_network,
         }
@@ -282,12 +280,7 @@ impl Indexer {
             to_add.len(),
             self.from
         );
-
-        if self.iconfig.sgx_enable {
-            crate::reg::add_blocks(&self, &daemon, to_add)?;
-        }else {
-            start_fetcher(self.from, &daemon, to_add)?.map(|blocks| self.add(&blocks));
-        }
+        start_fetcher(self.from, &daemon, to_add)?.map(|blocks| self.add(&blocks));
         self.start_auto_compactions(&self.store.txstore_db);
 
         let to_index = self.headers_to_index(&new_headers);
@@ -296,12 +289,57 @@ impl Indexer {
             to_index.len(),
             self.from
         );
-        if self.iconfig.sgx_enable {
-            crate::reg::index(&self, &daemon, to_index)?;
-        }else {
-            start_fetcher(self.from, &daemon, to_index)?.map(|blocks| self.index(&blocks));
+        start_fetcher(self.from, &daemon, to_index)?.map(|blocks| self.index(&blocks));
+        self.start_auto_compactions(&self.store.history_db);
 
+        if let DBFlush::Disable = self.flush {
+            debug!("flushing to disk");
+            self.store.txstore_db.flush();
+            self.store.history_db.flush();
+            self.flush = DBFlush::Enable;
         }
+
+        // update the synced tip *after* the new data is flushed to disk
+        debug!("updating synced tip to {:?}", tip);
+        self.store.txstore_db.put_sync(b"t", &serialize(&tip));
+
+        let mut headers = self.store.indexed_headers.write().unwrap();
+        headers.apply(new_headers);
+        assert_eq!(tip, *headers.tip());
+
+        if let FetchFrom::BlkFiles = self.from {
+            self.from = FetchFrom::Bitcoind;
+        }
+
+        self.tip_metric.set(headers.len() as i64 - 1);
+
+        Ok(tip)
+    }
+
+
+    pub fn sgx_update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
+        let daemon = daemon.reconnect()?;
+        let tip = daemon.getbestblockhash()?;
+        let new_headers = self.get_new_headers(&daemon, &tip)?;
+
+        let to_add = self.headers_to_add(&new_headers);
+        debug!(
+            "adding transactions from {} blocks using {:?}",
+            to_add.len(),
+            self.from
+        );
+
+        crate::reg::add_blocks(&self, &daemon, to_add)?;
+        self.start_auto_compactions(&self.store.txstore_db);
+
+        let to_index = self.headers_to_index(&new_headers);
+        debug!(
+            "indexing history from {} blocks using {:?}",
+            to_index.len(),
+            self.from
+        );
+
+        crate::reg::index(&self, &daemon, to_index)?;
         self.start_auto_compactions(&self.store.history_db);
 
         if let DBFlush::Disable = self.flush {
@@ -329,6 +367,30 @@ impl Indexer {
     }
 
     pub fn add(&self, blocks: &[BlockEntry]) {
+        debug!("Adding {} blocks to Indexer", blocks.len());
+        // TODO: skip orphaned blocks?
+        let rows = {
+            let _timer = self.start_timer("add_process");
+            add_blocks(blocks, &self.iconfig)
+        };
+        {
+            let _timer = self.start_timer("add_write");
+            self.store.txstore_db.write(rows, self.flush);
+        }
+
+        self.store
+            .added_blockhashes
+            .write()
+            .unwrap()
+            .extend(blocks.iter().map(|b| {
+                if b.entry.height() % 10_000 == 0 {
+                    info!("Tx indexing is up to height={}", b.entry.height());
+                }
+                b.entry.hash()
+            }));
+    }
+
+    pub fn sgx_add(&self, blocks: &[BlockEntry]) {
         debug!("Adding {} blocks to Indexer", blocks.len());
         // TODO: skip orphaned blocks?
         let rows: Vec<DBRow> = {
@@ -373,7 +435,7 @@ impl Indexer {
             let _timer = self.start_timer("index_lookup");
             lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
         };
-        let rows: Vec<DBRow> = {
+        let rows = {
             let _timer = self.start_timer("index_process");
             let added_blockhashes = self.store.added_blockhashes.read().unwrap();
             for b in blocks {
@@ -387,24 +449,8 @@ impl Indexer {
                 }
             }
             index_blocks(blocks, &previous_txos_map, &self.iconfig)
-            // let mut hs = Vec::new();
-
-            // for v in blocks.chunks(blocks.len()/NUM_THREAD){
-            //     let v: Vec<BlockEntry> = v.to_vec();
-            //     let iconfig = self.iconfig.clone();
-            //     let previous_txos_map = previous_txos_map.clone();
-            //     let h = std::thread::spawn( move ||{ 
-            //         index_blocks(&v, &previous_txos_map, &iconfig)
-            //     });
-            //     hs.push(h);
-            // };
-        
-            // hs.into_iter().map(|h| h.join().unwrap()).flatten().collect()
-
         };
-        for row in rows.chunks(50000) {
-            self.store.history_db.write(row.to_vec(), self.flush);      
-        }  
+        self.store.history_db.write(rows, self.flush);
     }
 }
 
