@@ -35,7 +35,7 @@ use crate::new_index::db::{DBFlush, DBRow, ReverseScanIterator, ScanIterator, DB
 use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
 
 #[cfg(feature = "liquid")]
-use crate::elements::{asset, peg};
+use crate::elements::{asset, peg, asset::sgx_index_confirmed_tx_assets};
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
@@ -435,6 +435,32 @@ impl Indexer {
                 }
             }
             index_blocks(blocks, &previous_txos_map, &self.iconfig)
+        };
+        self.store.history_db.write(rows, self.flush);
+    }
+
+    pub fn sgx_index(&self, blocks: &[BlockEntry]) {
+        debug!("Indexing {} blocks with Indexer", blocks.len());
+        let previous_txos_map = Arc::new(
+            {
+                let _timer = self.start_timer("index_lookup");
+                lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
+            }
+        );
+        let rows = {
+            let _timer = self.start_timer("index_process");
+            let added_blockhashes = self.store.added_blockhashes.read().unwrap();
+            for b in blocks {
+                if b.entry.height() % 10_000 == 0 {
+                    info!("History indexing is up to height={}", b.entry.height());
+                }
+                let blockhash = b.entry.hash();
+                // TODO: replace by lookup into txstore_db?
+                if !added_blockhashes.contains(blockhash) {
+                    panic!("cannot index block {} (missing from store)", blockhash);
+                }
+            }
+            sgx_index_blocks(Arc::new(blocks.to_vec()), previous_txos_map, Arc::new(self.iconfig.clone()))
         };
         self.store.history_db.write(rows, self.flush);
     }
@@ -1360,7 +1386,7 @@ fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfi
     let rows = Arc::new(Mutex::new(vec![]));
 
     for i in index.chunks(block_entries.len()/SGX_CHUNKS_NUM) {
-        let input_ptr = block_entries.clone();
+        let block_entries = block_entries.clone();
         let rows = rows.clone();
         let start_index = i[0].clone();
         let offset = i.len();
@@ -1368,7 +1394,7 @@ fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfi
 
         let h = std::thread::spawn(move || {
             for i in start_index..start_index+offset {
-                let b = &input_ptr[i];
+                let b = &block_entries[i];
                 let blockhash = full_hash(&b.entry.hash()[..]);
                 let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
                 for tx in &b.block.txdata {
@@ -1496,9 +1522,8 @@ fn index_blocks(
     previous_txos_map: &HashMap<OutPoint, TxOut>,
     iconfig: &IndexerConfig,
 ) -> Vec<DBRow> {
-    //crate::new_index::fetch::POOL.install(||{
-        block_entries
-        .iter() // serialization is CPU-intensive
+    block_entries
+        .par_iter() // serialization is CPU-intensive
         .map(|b| {
             let mut rows = vec![];
             for (idx, tx) in b.block.txdata.iter().enumerate() {
@@ -1517,7 +1542,46 @@ fn index_blocks(
         })
         .flatten()
         .collect()
-    //})
+}
+
+fn sgx_index_blocks(
+    block_entries: Arc<Vec<BlockEntry>>,
+    previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
+    iconfig: Arc<IndexerConfig>
+) -> Vec<DBRow> {
+    let index: Vec<usize> = (0..block_entries.len()).into_iter().collect();
+    let mut hs = Vec::new();
+    let rows = Arc::new(Mutex::new(vec![]));
+    for i in index.chunks(block_entries.len()/SGX_CHUNKS_NUM) {
+        let block_entries = block_entries.clone();
+        let rows = rows.clone();
+        let start_index = i[0].clone();
+        let offset = i.len();
+        let iconfig = iconfig.clone();
+        let previous_txos_map = previous_txos_map.clone();
+
+        let h = std::thread::spawn(move || {
+            for i in start_index..start_index+offset {
+                let b = &block_entries[i];
+                let height = b.entry.height() as u32;
+                for (idx, tx) in b.block.txdata.iter().enumerate() {
+                    sgx_index_transaction(
+                        tx,
+                        height,
+                        idx as u16,
+                        previous_txos_map.clone(),
+                        rows.clone(),
+                        iconfig.clone(),
+                    )
+                }
+                rows.lock().unwrap().push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row()); // mark block as "indexed"
+            }
+        });
+        hs.push(h);
+    }
+    hs.into_iter().for_each(|h| h.join().unwrap());
+    let re = rows.lock().unwrap().to_vec();
+    re
 }
 
 // TODO: return an iterator?
@@ -1598,6 +1662,86 @@ fn index_transaction(
         rows,
     );
 }
+
+// TODO: return an iterator?
+fn sgx_index_transaction(
+    tx: &Transaction,
+    confirmed_height: u32,
+    tx_position: u16,
+    previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
+    rows: Arc<Mutex<Vec<DBRow>>>,
+    iconfig: Arc<IndexerConfig>,
+) {
+    // persist history index:
+    //      H{funding-scripthash}{spending-height}{spending-block-pos}S{spending-txid:vin}{funding-txid:vout} → ""
+    //      H{funding-scripthash}{funding-height}{funding-block-pos}F{funding-txid:vout} → ""
+    // persist "edges" for fast is-this-TXO-spent check
+    //      S{funding-txid:vout}{spending-txid:vin} → ""
+    let txid = full_hash(&tx.txid()[..]);
+    for (txo_index, txo) in tx.output.iter().enumerate() {
+        if is_spendable(txo) || iconfig.index_unspendables {
+            let history = TxHistoryRow::new(
+                &txo.script_pubkey,
+                confirmed_height,
+                tx_position,
+                TxHistoryInfo::Funding(FundingInfo {
+                    txid,
+                    vout: txo_index as u16,
+                    value: txo.value,
+                }),
+            );
+            rows.lock().unwrap().push(history.into_row());
+
+            if iconfig.address_search {
+                if let Some(row) = addr_search_row(&txo.script_pubkey, iconfig.network) {
+                    rows.lock().unwrap().push(row);
+                }
+            }
+        }
+    }
+    for (txi_index, txi) in tx.input.iter().enumerate() {
+        if !has_prevout(txi) {
+            continue;
+        }
+        let prev_txo = previous_txos_map
+            .get(&txi.previous_output)
+            .unwrap_or_else(|| panic!("missing previous txo {}", txi.previous_output));
+
+        let history = TxHistoryRow::new(
+            &prev_txo.script_pubkey,
+            confirmed_height,
+            tx_position,
+            TxHistoryInfo::Spending(SpendingInfo {
+                txid,
+                vin: txi_index as u16,
+                prev_txid: full_hash(&txi.previous_output.txid[..]),
+                prev_vout: txi.previous_output.vout as u16,
+                value: prev_txo.value,
+            }),
+        );
+        rows.lock().unwrap().push(history.into_row());
+
+        let edge = TxEdgeRow::new(
+            full_hash(&txi.previous_output.txid[..]),
+            txi.previous_output.vout as u16,
+            txid,
+            txi_index as u16,
+        );
+        rows.lock().unwrap().push(edge.into_row());
+    }
+
+    // Index issued assets & native asset pegins/pegouts/burns
+    #[cfg(feature = "liquid")]
+    asset::sgx_index_confirmed_tx_assets(
+        tx,
+        confirmed_height,
+        tx_position,
+        iconfig.network,
+        iconfig.parent_network,
+        rows,
+    );
+}
+
 
 fn addr_search_row(spk: &Script, network: Network) -> Option<DBRow> {
     spk.to_address_str(network).map(|address| DBRow {
