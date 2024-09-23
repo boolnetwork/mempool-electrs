@@ -173,7 +173,7 @@ pub fn index(indexer: &crate::new_index::schema::Indexer, daemon: &crate::daemon
             })
             .collect();
         
-        indexer.index(&block_entries);
+        indexer.sgx_index(&block_entries);
     }
 
     if !entry_map.is_empty() {
