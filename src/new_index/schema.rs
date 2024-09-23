@@ -16,7 +16,8 @@ use elements::{
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use rayon::prelude::*;
 
 use crate::chain::{
     BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value,
@@ -38,7 +39,7 @@ use crate::elements::{asset, peg};
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
-const NUM_THREAD: usize = 4;
+const SGX_CHUNKS_NUM: usize = 40;
 
 pub struct Store {
     // TODO: should be column families
@@ -393,28 +394,13 @@ impl Indexer {
     pub fn sgx_add(&self, blocks: &[BlockEntry]) {
         debug!("Adding {} blocks to Indexer", blocks.len());
         // TODO: skip orphaned blocks?
-        let rows: Vec<DBRow> = {
+        let rows = {
             let _timer = self.start_timer("add_process");
-            //add_blocks(blocks, &self.iconfig)
-            let mut hs = Vec::new();
-
-            for v in blocks.chunks(usize::max(blocks.len()/NUM_THREAD,1)){
-                let v: Vec<BlockEntry> = v.to_vec();
-                let iconfig = self.iconfig.clone();
-                let h = std::thread::spawn( move ||{ 
-                    debug!("add blocks spawn");
-                    add_blocks(&v, &iconfig)
-                });
-                hs.push(h);
-            };
-        
-            hs.into_iter().map(|h| h.join().unwrap()).flatten().collect()
+            sgx_add_blocks(Arc::new(blocks.to_vec()), Arc::new(self.iconfig.clone()))
         };
         {
             let _timer = self.start_timer("add_write");
-            for row in rows.chunks(50000) {
-                self.store.txstore_db.write(row.to_vec(), self.flush);      
-            }             
+            self.store.txstore_db.write(rows, self.flush);
         }
 
         self.store
@@ -1337,26 +1323,74 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
     //      X{blockhash} → {txid1}...{txidN}
     //      M{blockhash} → {tx_count}{size}{weight}
     block_entries
-    .iter() // serialization is CPU-intensive
-    .map(|b| {
-        let mut rows = vec![];
-        let blockhash = full_hash(&b.entry.hash()[..]);
-        let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
-        for tx in &b.block.txdata {
-            add_transaction(tx, blockhash, &mut rows, iconfig);
-        }
+        .par_iter() // serialization is CPU-intensive
+        .map(|b| {
+            let mut rows = vec![];
+            let blockhash = full_hash(&b.entry.hash()[..]);
+            let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
+            for tx in &b.block.txdata {
+                add_transaction(tx, blockhash, &mut rows, iconfig);
+            }
 
-        if !iconfig.light_mode {
-            rows.push(BlockRow::new_txids(blockhash, &txids).into_row());
-            rows.push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
-        }
+            if !iconfig.light_mode {
+                rows.push(BlockRow::new_txids(blockhash, &txids).into_row());
+                rows.push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
+            }
 
-        rows.push(BlockRow::new_header(b).into_row());
-        rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
-        rows
-    })
-    .flatten()
-    .collect()
+            rows.push(BlockRow::new_header(b).into_row());
+            rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+            rows
+        })
+        .flatten()
+        .collect()
+}
+
+fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfig>) -> Vec<DBRow> {
+    // persist individual transactions:
+    //      T{txid} → {rawtx}
+    //      C{txid}{blockhash}{height} →
+    //      O{txid}{index} → {txout}
+    // persist block headers', block txids' and metadata rows:
+    //      B{blockhash} → {header}
+    //      X{blockhash} → {txid1}...{txidN}
+    //      M{blockhash} → {tx_count}{size}{weight}
+
+    let index: Vec<usize> = (0..block_entries.len()).into_iter().collect();
+    let mut hs = Vec::new();
+    let rows = Arc::new(Mutex::new(vec![]));
+
+    for i in index.chunks(block_entries.len()/SGX_CHUNKS_NUM) {
+        let input_ptr = block_entries.clone();
+        let rows = rows.clone();
+        let start_index = i[0].clone();
+        let offset = i.len();
+        let iconfig = iconfig.clone();
+
+        let h = std::thread::spawn(move || {
+            for i in start_index..start_index+offset {
+                let b = &input_ptr[i];
+                let blockhash = full_hash(&b.entry.hash()[..]);
+                let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
+                for tx in &b.block.txdata {
+                    sgx_add_transaction(tx, blockhash, rows.clone(), iconfig.clone());
+                }
+
+                if !iconfig.light_mode {
+                    rows.lock().unwrap().push(BlockRow::new_txids(blockhash, &txids).into_row());
+                    rows.lock().unwrap().push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
+                }
+
+                rows.lock().unwrap().push(BlockRow::new_header(b).into_row());
+                rows.lock().unwrap().push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+            }
+        });
+
+        hs.push(h);
+    }
+
+    hs.into_iter().for_each(|h| h.join().unwrap());
+    let re = rows.lock().unwrap().to_vec();
+    re
 }
 
 fn add_transaction(
@@ -1375,6 +1409,26 @@ fn add_transaction(
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if is_spendable(txo) {
             rows.push(TxOutRow::new(&txid, txo_index, txo).into_row());
+        }
+    }
+}
+
+fn sgx_add_transaction(
+    tx: &Transaction,
+    blockhash: FullHash,
+    rows: Arc<Mutex<Vec<DBRow>>>,
+    iconfig: Arc<IndexerConfig>,
+) {
+    rows.lock().unwrap().push(TxConfRow::new(tx, blockhash).into_row());
+
+    if !iconfig.light_mode {
+        rows.lock().unwrap().push(TxRow::new(tx).into_row());
+    }
+
+    let txid = full_hash(&tx.txid()[..]);
+    for (txo_index, txo) in tx.output.iter().enumerate() {
+        if is_spendable(txo) {
+            rows.lock().unwrap().push(TxOutRow::new(&txid, txo_index, txo).into_row());
         }
     }
 }
