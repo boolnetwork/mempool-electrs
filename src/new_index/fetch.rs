@@ -44,6 +44,7 @@ pub struct BlockEntry {
 type SizedBlock = (Block, u32);
 
 use std::sync::mpsc as crossbeam_channel;
+use rayon::prelude::*;
 
 
 pub struct Fetcher<T> {
@@ -216,7 +217,7 @@ fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<S
     )
 }
 
-pub fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
+pub fn sgx_parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     let mut cursor = Cursor::new(&blob);
     let mut slices = vec![];
     let max_pos = blob.len() as u64;
@@ -253,24 +254,62 @@ pub fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         cursor.set_position(end);
     }
 
-    // let pool = rayon::ThreadPoolBuilder::new()
-    //     .num_threads(0) // CPU-bound
-    //     .thread_name(|i| format!("parse-blocks-{}", i))
-    //     .build()
-    //     .unwrap();
-    // Ok(pool.install(|| {
-    //     slices
-    //         .into_par_iter()
-    //         .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
-    //         .collect()
-    // }))
-
     let data: Vec<SizedBlock> = slices
         .into_iter()
         .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
         .collect();
 
     Ok(data)
+}
+
+fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
+    let mut cursor = Cursor::new(&blob);
+    let mut slices = vec![];
+    let max_pos = blob.len() as u64;
+
+    while cursor.position() < max_pos {
+        let offset = cursor.position();
+        match u32::consensus_decode(&mut cursor) {
+            Ok(value) => {
+                if magic != value {
+                    cursor.set_position(offset + 1);
+                    continue;
+                }
+            }
+            Err(_) => break, // EOF
+        };
+        let block_size = u32::consensus_decode(&mut cursor).chain_err(|| "no block size")?;
+        let start = cursor.position();
+        let end = start + block_size as u64;
+
+        // If Core's WriteBlockToDisk ftell fails, only the magic bytes and size will be written
+        // and the block body won't be written to the blk*.dat file.
+        // Since the first 4 bytes should contain the block's version, we can skip such blocks
+        // by peeking the cursor (and skipping previous `magic` and `block_size`).
+        match u32::consensus_decode(&mut cursor) {
+            Ok(value) => {
+                if magic == value {
+                    cursor.set_position(start);
+                    continue;
+                }
+            }
+            Err(_) => break, // EOF
+        }
+        slices.push((&blob[start as usize..end as usize], block_size));
+        cursor.set_position(end);
+    }
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(0) // CPU-bound
+        .thread_name(|i| format!("parse-blocks-{}", i))
+        .build()
+        .unwrap();
+    Ok(pool.install(|| {
+        slices
+            .into_par_iter()
+            .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
+            .collect()
+    }))
 }
 
 fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
@@ -318,25 +357,18 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         cursor.set_position(end);
     }
 
-    // let pool = rayon::ThreadPoolBuilder::new()
-    //     .num_threads(0) // CPU-bound
-    //     .thread_name(|i| format!("parse-blocks-{}", i))
-    //     .build()
-    //     .unwrap();
-    //
-    // Ok(pool.install(|| {
-    //     slices
-    //         .into_par_iter()
-    //         .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
-    //         .collect()
-    // }))
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(0) // CPU-bound
+        .thread_name(|i| format!("parse-blocks-{}", i))
+        .build()
+        .unwrap();
 
-    let data: Vec<SizedBlock> = slices
-        .into_iter()
-        .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
-        .collect();
-
-    Ok(data)
+    Ok(pool.install(|| {
+        slices
+            .into_par_iter()
+            .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+            .collect()
+    }))
 }
 
 #[cfg(test)]

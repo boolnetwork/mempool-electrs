@@ -166,6 +166,7 @@ struct Connection {
     cookie_getter: Arc<dyn CookieGetter>,
     addr: SocketAddr,
     signal: Waiter,
+    sgx_enable: bool,
 }
 
 fn tcp_connect(addr: SocketAddr, signal: &Waiter) -> Result<TcpStream> {
@@ -186,6 +187,7 @@ impl Connection {
         addr: SocketAddr,
         cookie_getter: Arc<dyn CookieGetter>,
         signal: Waiter,
+        sgx_enable: bool,
     ) -> Result<Connection> {
         let conn = tcp_connect(addr, &signal)?;
         let reader = BufReader::new(
@@ -198,11 +200,12 @@ impl Connection {
             cookie_getter,
             addr,
             signal,
+            sgx_enable
         })
     }
 
     fn reconnect(&self) -> Result<Connection> {
-        Connection::new(self.addr, self.cookie_getter.clone(), self.signal.clone())
+        Connection::new(self.addr, self.cookie_getter.clone(), self.signal.clone(), self.sgx_enable)
     }
 
     fn send(&mut self, request: &str) -> Result<()> {
@@ -250,21 +253,23 @@ impl Connection {
 
         let contents =
             contents.chain_err(|| ErrorKind::Connection("no reply from daemon".to_owned()))?;
-        // let contents_length: &str = headers
-        //     .get("Content-Length")
-        //     .chain_err(|| format!("Content-Length is missing: {:?}", headers))?;
-        // let contents_length: usize = contents_length
-        //     .parse()
-        //     .chain_err(|| format!("invalid Content-Length: {:?}", contents_length))?;
+        if !self.sgx_enable {
+            let contents_length: &str = headers
+                .get("Content-Length")
+                .chain_err(|| format!("Content-Length is missing: {:?}", headers))?;
+            let contents_length: usize = contents_length
+                .parse()
+                .chain_err(|| format!("invalid Content-Length: {:?}", contents_length))?;
 
-        // let expected_length = contents_length - 1; // trailing EOL is skipped
-        // if expected_length != contents.len() {
-        //     bail!(ErrorKind::Connection(format!(
-        //         "expected {} bytes, got {}",
-        //         expected_length,
-        //         contents.len()
-        //     )));
-        // }
+            let expected_length = contents_length - 1; // trailing EOL is skipped
+            if expected_length != contents.len() {
+                bail!(ErrorKind::Connection(format!(
+                    "expected {} bytes, got {}",
+                    expected_length,
+                    contents.len()
+                )));
+            }
+        }
 
         Ok(if status == "HTTP/1.1 200 OK" {
             contents
@@ -339,6 +344,7 @@ impl Daemon {
                 daemon_rpc_addr,
                 cookie_getter,
                 signal.clone(),
+                sgx_enable
             )?),
             message_id: Counter::new(),
             signal: signal.clone(),
@@ -439,11 +445,6 @@ impl Daemon {
             .with_label_values(&[method, "send"])
             .observe(request.len() as f64);
         let response = conn.recv()?;
-
-        let response = 
-        sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
-        .map_err(|e| format!("{e:?}"))?;
-    
         let result: Value = from_str(&response).chain_err(|| "invalid JSON")?;
         timer.observe_duration();
         self.size
@@ -470,11 +471,10 @@ impl Daemon {
         let id = self.message_id.next();
         let chunks = params_list
             .iter()
-            .map(|params| json!({"jsonrpc":"2.0", "method": method, "params": params, "id": id}))
-            .chunks(10000); // Max Amount of batched requests
+            .map(|params| json!({"method": method, "params": params, "id": id}))
+            .chunks(50_000); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
-        debug!("total_requests {}", total_requests);
         let mut failed_requests: u64 = 0;
         let threshold = (failure_threshold * total_requests as f64).round() as u64;
         let mut n = 0;
@@ -510,7 +510,6 @@ impl Daemon {
             } else {
                 bail!("non-array replies: {:?}", replies);
             }
-            //std::thread::sleep(std::time::Duration::from_millis(300));
         }
 
         Ok(results)
@@ -525,7 +524,7 @@ impl Daemon {
         loop {
             match self.handle_request_batch(method, params_list, failure_threshold) {
                 Err(Error(ErrorKind::Connection(msg), _)) => {
-                    debug!("reconnecting to bitcoind: {}", msg);
+                    warn!("reconnecting to bitcoind: {}", msg);
                     self.signal.wait(Duration::from_secs(3), false)?;
                     let mut conn = self.conn.lock().unwrap();
                     *conn = conn.reconnect()?;
@@ -537,10 +536,12 @@ impl Daemon {
     }
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
-        debug!("request method {}",method);
-        let filter = crate::reg::filter_requests(method);
-        if filter.is_some() {
-            return Ok(filter.unwrap());
+        if self.sgx_enable {
+            debug!("request method {}",method);
+            let filter = crate::reg::filter_requests(method);
+            if filter.is_some() {
+                return Ok(filter.unwrap());
+            }
         }
 
         let mut values = self.retry_request_batch(method, &[params], 0.0)?;
@@ -549,7 +550,6 @@ impl Daemon {
     }
 
     fn requests(&self, method: &str, params_list: &[Value]) -> Result<Vec<Value>> {
-        debug!("requests method {}",method);
         self.retry_request_batch(method, params_list, 0.0)
     }
 
