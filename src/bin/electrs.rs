@@ -63,11 +63,15 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         &metrics,
     );
 
-    let mut tip = if config.sgx_enable {
+    #[cfg(not(feature = "liquid"))]
+        let mut tip = if config.sgx_enable {
         indexer.sgx_update(&daemon)?
     } else {
         indexer.update(&daemon)?
     };
+    #[cfg(feature = "liquid")]
+        let mut tip = indexer.update(&daemon)?;
+
 
     let chain = Arc::new(ChainQuery::new(
         Arc::clone(&store),
@@ -95,7 +99,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     }
 
     #[cfg(feature = "liquid")]
-    let asset_db = config.asset_db_path.as_ref().map(|db_dir| {
+        let asset_db = config.asset_db_path.as_ref().map(|db_dir| {
         let asset_db = Arc::new(RwLock::new(AssetRegistry::new(db_dir.clone())));
         AssetRegistry::spawn_sync(asset_db.clone());
         asset_db
@@ -107,7 +111,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         Arc::clone(&daemon),
         Arc::clone(&config),
         #[cfg(feature = "liquid")]
-        asset_db,
+            asset_db,
     ));
 
     // TODO: configuration for which servers to start
@@ -149,11 +153,15 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         // Index new blocks
         let current_tip = daemon.getbestblockhash()?;
         if current_tip != tip {
+            #[cfg(not(feature = "liquid"))]
             if config.sgx_enable {
                 indexer.sgx_update(&daemon)?;
             } else {
                 indexer.update(&daemon)?;
             }
+            #[cfg(feature = "liquid")]
+            indexer.update(&daemon)?;
+
             tip = current_tip;
         };
 
@@ -199,7 +207,7 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
                     config.watcher_device_id.clone(),
                     2u16,
                 )
-                .await;
+                    .await;
                 std::thread::park();
             });
         });

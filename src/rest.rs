@@ -1910,7 +1910,7 @@ fn parse_cross_data_from_op_return(
     is_deposit: bool,
 ) -> Result<Vec<u8>, HttpError> {
     let res =
-        Runestone::decipher(&tx).ok_or(HttpError::from("decipher Runestone failed".to_string()))?;
+        Runestone::decipher(tx).ok_or(HttpError::from("decipher Runestone failed".to_string()))?;
     if let Artifact::Runestone(runestone) = res {
         let custom_edicts: Vec<_> = runestone
             .edicts

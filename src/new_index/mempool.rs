@@ -407,7 +407,7 @@ impl Mempool {
     }
 
     pub fn add_by_txid(&mut self, daemon: &Daemon, txid: &Txid) -> Result<()> {
-        if self.txstore.get(txid).is_none() {
+        if !self.txstore.contains_key(txid){
             if let Ok(tx) = daemon.getmempooltx(txid) {
                 if self.add(vec![tx]) == 0 {
                     return Err(format!(
@@ -526,7 +526,7 @@ impl Mempool {
             for (scripthash, entry) in funding.chain(spending) {
                 self.history
                     .entry(scripthash)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(entry);
             }
             for (i, txi) in tx.input.iter().enumerate() {

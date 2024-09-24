@@ -341,16 +341,12 @@ pub(super) mod sigops {
         match (witness_version, witness_program.len()) {
             (0, 20) => 1,
             (0, 32) => {
-                if let Some(n) = last_witness
+                last_witness
                     .map(|sl| sl.iter().map(|v| Ok(*v)))
                     .map(script::Script::from_byte_iter)
                     // I only return Ok 2 lines up, so there is no way to error
                     .map(|s| count_sigops(&s.unwrap(), true))
-                {
-                    n
-                } else {
-                    0
-                }
+                    .unwrap_or_default()
             }
             _ => 0,
         }

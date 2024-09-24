@@ -16,7 +16,7 @@ use serde_json::{from_str, from_value, Value};
 use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
-
+#[cfg(not(feature = "liquid"))]
 use crate::chain::Network::{Fractal, FractalTestnet};
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
@@ -51,7 +51,7 @@ fn header_from_value_fractal(value: Value) -> Result<BlockHeader> {
         .chain_err(|| format!("non-string header: {}", value))?;
     let header_bytes = hex::decode(header_hex).chain_err(|| "non-hex header")?;
     if header_bytes.len() < 80 {
-        return Err("header is too short")?;
+        Err("header is too short")?;
     }
     let header_bytes = &header_bytes[0..80];
     deserialize(header_bytes).chain_err(|| format!("failed to parse header {}", header_hex))
@@ -364,6 +364,7 @@ impl Daemon {
         };
         let network_info = daemon.getnetworkinfo()?;
         info!("{:?}", network_info);
+        #[cfg(not(feature = "liquid"))]
         match daemon.network {
             Fractal | FractalTestnet => {}
             _ => {
@@ -374,6 +375,14 @@ impl Daemon {
                     )
                 }
             }
+        }
+
+        #[cfg(feature = "liquid")]
+        if network_info.version < 16_00_00 {
+            bail!(
+                "{} is not supported - please use bitcoind 0.16+",
+                network_info.subversion,
+            )
         }
 
         let blockchain_info = daemon.getblockchaininfo()?;
@@ -460,7 +469,7 @@ impl Daemon {
 
     fn send_req(&self, req: &Value) -> Result<Value> {
         let addr = self.conn.lock().unwrap().addr;
-        let url = format!("http://{}", addr.to_string());
+        let url = format!("http://{}", addr);
         let cookie = self.conn.lock().unwrap().cookie_getter.get()?;
         let auth = format!("Basic {}", base64::encode(cookie));
 
@@ -543,9 +552,8 @@ impl Daemon {
     fn request(&self, method: &str, params: Value) -> Result<Value> {
         if self.sgx_enable {
             debug!("request method {}", method);
-            let filter = crate::reg::filter_requests(method);
-            if filter.is_some() {
-                return Ok(filter.unwrap());
+            if let Some(values) = crate::reg::filter_requests(method) {
+                return Ok(values)
             }
         }
 
@@ -580,6 +588,7 @@ impl Daemon {
     }
 
     pub fn getblockheader(&self, blockhash: &BlockHash) -> Result<BlockHeader> {
+        #[cfg(not(feature = "liquid"))]
         if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
             header_from_value_fractal(self.request(
                 "getblockheader",
@@ -591,6 +600,12 @@ impl Daemon {
                 json!([blockhash.to_hex(), /*verbose=*/ false]),
             )?)
         }
+
+        #[cfg(feature = "liquid")]
+        header_from_value(self.request(
+            "getblockheader",
+            json!([blockhash.to_hex(), /*verbose=*/ false]),
+        )?)
     }
 
     pub fn getblockheaders(&self, heights: &[usize]) -> Result<Vec<BlockHeader>> {
@@ -602,11 +617,14 @@ impl Daemon {
             .collect();
         let mut result = vec![];
         for h in self.requests("getblockheader", &params_list)? {
+            #[cfg(not(feature = "liquid"))]
             if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
                 result.push(header_from_value_fractal(h)?);
             } else {
                 result.push(header_from_value(h)?);
             }
+            #[cfg(feature = "liquid")]
+            result.push(header_from_value(h)?);
         }
         Ok(result)
     }
