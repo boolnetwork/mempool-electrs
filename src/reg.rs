@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bitcoin::Block;
+use bitcoin::{Block, TxMerkleNode};
 
 use crate::util::HeaderEntry;
 
@@ -12,12 +12,9 @@ lazy_static! {
 }
 
 pub fn validate_tx_root(block: &Block, entry: &HeaderEntry) {
-    let txhashroot = block.compute_merkle_root().expect(&format!(
-        "failed to compute root of txs of block {}",
-        block.block_hash()
-    ));
+    let txhashroot = block.compute_merkle_root().unwrap_or_else(|| panic!("failed to compute root of txs of block {}", block.block_hash()));
 
-    let sgx_txhashroot = entry.header().merkle_root;
+    let sgx_txhashroot = TxMerkleNode::from_hash(entry.header().merkle_root.as_hash());
 
     assert_eq!(
         txhashroot,
@@ -43,7 +40,7 @@ pub fn filter_requests(method: &str) -> Option<Value> {
         ));
     }
 
-    return None;
+    None
 }
 
 pub fn create_sgx_response<T: serde::Serialize>(value: T, sgx_enable: bool) -> String {
@@ -53,8 +50,7 @@ pub fn create_sgx_response<T: serde::Serialize>(value: T, sgx_enable: bool) -> S
         sgx_bool_registration_tool::KeyType::TEST
     };
 
-    let value = sgx_bool_registration_tool::create_sgx_response_v2(value, keytype);
-    value
+    sgx_bool_registration_tool::create_sgx_response_v2(value, keytype)
 }
 
 pub fn seal_data(value: Vec<u8>) -> Vec<u8> {
@@ -81,7 +77,7 @@ pub fn request(addr: String, auth: String, req: &Value) -> crate::errors::Result
     // sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
     // .map_err(|e| format!("{e:?}"))?;
 
-    let result: Value = serde_json::from_str(&response).map_err(|_| format!("json error"))?;
+    let result: Value = serde_json::from_str(&response).map_err(|_| "json error".to_string())?;
     Ok(result)
 }
 
@@ -111,7 +107,7 @@ pub fn add_blocks(
             .filter_map(|(block, size)| {
                 let blockhash = block.block_hash();
 
-                if entry_map.get(&blockhash).is_some() {
+                if entry_map.contains_key(&blockhash) {
                     crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
                     entry_map
                         .remove(&blockhash)
@@ -162,7 +158,7 @@ pub fn index(
             .filter_map(|(block, size)| {
                 let blockhash = block.block_hash();
 
-                if entry_map.get(&blockhash).is_some() {
+                if entry_map.contains_key(&blockhash) {
                     crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
                     entry_map
                         .remove(&blockhash)

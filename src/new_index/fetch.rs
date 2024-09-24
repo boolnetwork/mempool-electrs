@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::thread;
-use std::{fs, u32, u8};
-
+use std::fs;
+#[cfg(not(feature = "liquid"))]
 use crate::chain::Network::{Fractal, FractalTestnet};
 use crate::chain::{Block, BlockHash};
 use crate::daemon::Daemon;
@@ -82,7 +82,8 @@ fn bitcoind_fetcher(
         spawn_thread("bitcoind_fetcher", move || {
             for entries in new_headers.chunks(100) {
                 let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
-                let blocks = match daemon.network() {
+                #[cfg(not(feature = "liquid"))]
+                    let blocks = match daemon.network() {
                     Fractal | FractalTestnet => daemon
                         .get_fractal_bocks(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
@@ -90,6 +91,12 @@ fn bitcoind_fetcher(
                         .getblocks(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                 };
+
+                #[cfg(feature = "liquid")]
+                    let blocks = daemon
+                    .getblocks(&blockhashes)
+                    .expect("failed to get blocks from bitcoind");
+
                 assert_eq!(blocks.len(), entries.len());
                 let block_entries: Vec<BlockEntry> = blocks
                     .into_iter()
@@ -122,11 +129,14 @@ fn blkfiles_fetcher(
     let mut entry_map: HashMap<BlockHash, HeaderEntry> =
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
-    let parser = if daemon.network().eq(&Fractal) || daemon.network().eq(&FractalTestnet) {
+    #[cfg(not(feature = "liquid"))]
+        let parser = if daemon.network().eq(&Fractal) || daemon.network().eq(&FractalTestnet) {
         blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
     } else {
         blkfiles_parser(blkfiles_reader(blk_files), magic)
     };
+    #[cfg(feature = "liquid")]
+        let parser = blkfiles_parser(blkfiles_reader(blk_files), magic);
 
     Ok(Fetcher::from(
         chan.into_receiver(),
@@ -255,7 +265,7 @@ pub fn sgx_parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
 
     let data: Vec<SizedBlock> = slices
         .into_iter()
-        .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+        .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
         .collect();
 
     Ok(data)

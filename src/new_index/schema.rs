@@ -35,7 +35,7 @@ use crate::new_index::db::{DBFlush, DBRow, ReverseScanIterator, ScanIterator, DB
 use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
 
 #[cfg(feature = "liquid")]
-use crate::elements::{asset, asset::sgx_index_confirmed_tx_assets, peg};
+use crate::elements::{asset, peg};
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
@@ -329,7 +329,7 @@ impl Indexer {
             self.from
         );
 
-        crate::reg::add_blocks(&self, &daemon, to_add)?;
+        crate::reg::add_blocks(self, &daemon, to_add)?;
         self.start_auto_compactions(&self.store.txstore_db);
 
         let to_index = self.headers_to_index(&new_headers);
@@ -339,7 +339,7 @@ impl Indexer {
             self.from
         );
 
-        crate::reg::index(&self, &daemon, to_index)?;
+        crate::reg::index(self, &daemon, to_index)?;
         self.start_auto_compactions(&self.store.history_db);
 
         if let DBFlush::Disable = self.flush {
@@ -1382,14 +1382,14 @@ fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfi
     //      X{blockhash} → {txid1}...{txidN}
     //      M{blockhash} → {tx_count}{size}{weight}
 
-    let index: Vec<usize> = (0..block_entries.len()).into_iter().collect();
+    let index: Vec<usize> = (0..block_entries.len()).collect();
     let mut hs = Vec::new();
     let rows = Arc::new(Mutex::new(vec![]));
 
     for i in index.chunks(block_entries.len() / SGX_CHUNKS_NUM) {
         let block_entries = block_entries.clone();
         let rows = rows.clone();
-        let start_index = i[0].clone();
+        let start_index = i[0];
         let offset = i.len();
         let iconfig = iconfig.clone();
 
@@ -1552,13 +1552,13 @@ fn sgx_index_blocks(
     previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
     iconfig: Arc<IndexerConfig>,
 ) -> Vec<DBRow> {
-    let index: Vec<usize> = (0..block_entries.len()).into_iter().collect();
+    let index: Vec<usize> = (0..block_entries.len()).collect();
     let mut hs = Vec::new();
     let rows = Arc::new(Mutex::new(vec![]));
     for i in index.chunks(block_entries.len() / SGX_CHUNKS_NUM) {
         let block_entries = block_entries.clone();
         let rows = rows.clone();
-        let start_index = i[0].clone();
+        let start_index = i[0];
         let offset = i.len();
         let iconfig = iconfig.clone();
         let previous_txos_map = previous_txos_map.clone();
@@ -2051,7 +2051,7 @@ impl TxHistoryRow {
     }
 
     fn prefix_end(code: u8, hash: &[u8]) -> Bytes {
-        bincode_util::serialize_big(&(code, full_hash(hash), std::u32::MAX)).unwrap()
+        bincode_util::serialize_big(&(code, full_hash(hash), u32::MAX)).unwrap()
     }
 
     fn prefix_height(code: u8, hash: &[u8], height: u32) -> Bytes {
