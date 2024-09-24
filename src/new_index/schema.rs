@@ -13,11 +13,11 @@ use elements::{
     AssetId,
 };
 
+use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
-use rayon::prelude::*;
 
 use crate::chain::{
     BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value,
@@ -35,7 +35,7 @@ use crate::new_index::db::{DBFlush, DBRow, ReverseScanIterator, ScanIterator, DB
 use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
 
 #[cfg(feature = "liquid")]
-use crate::elements::{asset, peg, asset::sgx_index_confirmed_tx_assets};
+use crate::elements::{asset, asset::sgx_index_confirmed_tx_assets, peg};
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
@@ -317,7 +317,6 @@ impl Indexer {
         Ok(tip)
     }
 
-
     pub fn sgx_update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
         let daemon = daemon.reconnect()?;
         let tip = daemon.getbestblockhash()?;
@@ -441,12 +440,10 @@ impl Indexer {
 
     pub fn sgx_index(&self, blocks: &[BlockEntry]) {
         debug!("Indexing {} blocks with Indexer", blocks.len());
-        let previous_txos_map = Arc::new(
-            {
-                let _timer = self.start_timer("index_lookup");
-                lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
-            }
-        );
+        let previous_txos_map = Arc::new({
+            let _timer = self.start_timer("index_lookup");
+            lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
+        });
         let rows = {
             let _timer = self.start_timer("index_process");
             let added_blockhashes = self.store.added_blockhashes.read().unwrap();
@@ -460,7 +457,11 @@ impl Indexer {
                     panic!("cannot index block {} (missing from store)", blockhash);
                 }
             }
-            sgx_index_blocks(Arc::new(blocks.to_vec()), previous_txos_map, Arc::new(self.iconfig.clone()))
+            sgx_index_blocks(
+                Arc::new(blocks.to_vec()),
+                previous_txos_map,
+                Arc::new(self.iconfig.clone()),
+            )
         };
         self.store.history_db.write(rows, self.flush);
     }
@@ -1385,7 +1386,7 @@ fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfi
     let mut hs = Vec::new();
     let rows = Arc::new(Mutex::new(vec![]));
 
-    for i in index.chunks(block_entries.len()/SGX_CHUNKS_NUM) {
+    for i in index.chunks(block_entries.len() / SGX_CHUNKS_NUM) {
         let block_entries = block_entries.clone();
         let rows = rows.clone();
         let start_index = i[0].clone();
@@ -1393,22 +1394,24 @@ fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfi
         let iconfig = iconfig.clone();
 
         let h = std::thread::spawn(move || {
-            for i in start_index..start_index+offset {
+            let mut rows_split = vec![];
+            for i in start_index..start_index + offset {
                 let b = &block_entries[i];
                 let blockhash = full_hash(&b.entry.hash()[..]);
                 let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
                 for tx in &b.block.txdata {
-                    sgx_add_transaction(tx, blockhash, rows.clone(), iconfig.clone());
+                    sgx_add_transaction(tx, blockhash, &mut rows_split, iconfig.clone());
                 }
 
                 if !iconfig.light_mode {
-                    rows.lock().unwrap().push(BlockRow::new_txids(blockhash, &txids).into_row());
-                    rows.lock().unwrap().push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
+                    rows_split.push(BlockRow::new_txids(blockhash, &txids).into_row());
+                    rows_split.push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
                 }
 
-                rows.lock().unwrap().push(BlockRow::new_header(b).into_row());
-                rows.lock().unwrap().push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+                rows_split.push(BlockRow::new_header(b).into_row());
+                rows_split.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
             }
+            rows.lock().unwrap().extend_from_slice(&rows_split);
         });
 
         hs.push(h);
@@ -1442,19 +1445,19 @@ fn add_transaction(
 fn sgx_add_transaction(
     tx: &Transaction,
     blockhash: FullHash,
-    rows: Arc<Mutex<Vec<DBRow>>>,
+    rows: &mut Vec<DBRow>,
     iconfig: Arc<IndexerConfig>,
 ) {
-    rows.lock().unwrap().push(TxConfRow::new(tx, blockhash).into_row());
+    rows.push(TxConfRow::new(tx, blockhash).into_row());
 
     if !iconfig.light_mode {
-        rows.lock().unwrap().push(TxRow::new(tx).into_row());
+        rows.push(TxRow::new(tx).into_row());
     }
 
     let txid = full_hash(&tx.txid()[..]);
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if is_spendable(txo) {
-            rows.lock().unwrap().push(TxOutRow::new(&txid, txo_index, txo).into_row());
+            rows.push(TxOutRow::new(&txid, txo_index, txo).into_row());
         }
     }
 }
@@ -1547,12 +1550,12 @@ fn index_blocks(
 fn sgx_index_blocks(
     block_entries: Arc<Vec<BlockEntry>>,
     previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
-    iconfig: Arc<IndexerConfig>
+    iconfig: Arc<IndexerConfig>,
 ) -> Vec<DBRow> {
     let index: Vec<usize> = (0..block_entries.len()).into_iter().collect();
     let mut hs = Vec::new();
     let rows = Arc::new(Mutex::new(vec![]));
-    for i in index.chunks(block_entries.len()/SGX_CHUNKS_NUM) {
+    for i in index.chunks(block_entries.len() / SGX_CHUNKS_NUM) {
         let block_entries = block_entries.clone();
         let rows = rows.clone();
         let start_index = i[0].clone();
@@ -1561,7 +1564,8 @@ fn sgx_index_blocks(
         let previous_txos_map = previous_txos_map.clone();
 
         let h = std::thread::spawn(move || {
-            for i in start_index..start_index+offset {
+            let mut rows_split = vec![];
+            for i in start_index..start_index + offset {
                 let b = &block_entries[i];
                 let height = b.entry.height() as u32;
                 for (idx, tx) in b.block.txdata.iter().enumerate() {
@@ -1570,12 +1574,14 @@ fn sgx_index_blocks(
                         height,
                         idx as u16,
                         previous_txos_map.clone(),
-                        rows.clone(),
+                        &mut rows_split,
                         iconfig.clone(),
                     )
                 }
-                rows.lock().unwrap().push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row()); // mark block as "indexed"
+                rows_split.push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row());
+                // mark block as "indexed"
             }
+            rows.lock().unwrap().extend_from_slice(&rows_split);
         });
         hs.push(h);
     }
@@ -1669,7 +1675,7 @@ fn sgx_index_transaction(
     confirmed_height: u32,
     tx_position: u16,
     previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
-    rows: Arc<Mutex<Vec<DBRow>>>,
+    rows: &mut Vec<DBRow>,
     iconfig: Arc<IndexerConfig>,
 ) {
     // persist history index:
@@ -1690,11 +1696,11 @@ fn sgx_index_transaction(
                     value: txo.value,
                 }),
             );
-            rows.lock().unwrap().push(history.into_row());
+            rows.push(history.into_row());
 
             if iconfig.address_search {
                 if let Some(row) = addr_search_row(&txo.script_pubkey, iconfig.network) {
-                    rows.lock().unwrap().push(row);
+                    rows.push(row);
                 }
             }
         }
@@ -1719,7 +1725,7 @@ fn sgx_index_transaction(
                 value: prev_txo.value,
             }),
         );
-        rows.lock().unwrap().push(history.into_row());
+        rows.push(history.into_row());
 
         let edge = TxEdgeRow::new(
             full_hash(&txi.previous_output.txid[..]),
@@ -1727,12 +1733,12 @@ fn sgx_index_transaction(
             txid,
             txi_index as u16,
         );
-        rows.lock().unwrap().push(edge.into_row());
+        rows.push(edge.into_row());
     }
 
     // Index issued assets & native asset pegins/pegouts/burns
     #[cfg(feature = "liquid")]
-    asset::sgx_index_confirmed_tx_assets(
+    asset::index_confirmed_tx_assets(
         tx,
         confirmed_height,
         tx_position,
@@ -1741,7 +1747,6 @@ fn sgx_index_transaction(
         rows,
     );
 }
-
 
 fn addr_search_row(spk: &Script, network: Network) -> Option<DBRow> {
     spk.to_address_str(network).map(|address| DBRow {

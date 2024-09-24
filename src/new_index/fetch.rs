@@ -43,9 +43,8 @@ pub struct BlockEntry {
 
 type SizedBlock = (Block, u32);
 
-use std::sync::mpsc as crossbeam_channel;
 use rayon::prelude::*;
-
+use std::sync::mpsc as crossbeam_channel;
 
 pub struct Fetcher<T> {
     receiver: crossbeam_channel::Receiver<T>,
@@ -123,7 +122,7 @@ fn blkfiles_fetcher(
     let mut entry_map: HashMap<BlockHash, HeaderEntry> =
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
-    let parser = if daemon.network().eq(&Fractal) ||  daemon.network().eq(&FractalTestnet) {
+    let parser = if daemon.network().eq(&Fractal) || daemon.network().eq(&FractalTestnet) {
         blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
     } else {
         blkfiles_parser(blkfiles_reader(blk_files), magic)

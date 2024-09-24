@@ -194,31 +194,6 @@ pub fn index_confirmed_tx_assets(
     }));
 }
 
-// Index confirmed transaction issuances and save as db rows
-pub fn sgx_index_confirmed_tx_assets(
-    tx: &Transaction,
-    confirmed_height: u32,
-    tx_position: u16,
-    network: Network,
-    parent_network: BNetwork,
-    rows: Arc<Mutex<Vec<DBRow>>>,
-) {
-    let (history, issuances) = index_tx_assets(tx, network, parent_network);
-
-    rows.lock().unwrap().extend(history.into_iter().map(|(asset_id, info)| {
-        asset_history_row(&asset_id, confirmed_height, tx_position, info).into_row()
-    }));
-
-    // the initial issuance is kept twice: once in the history index under I<asset><height><txid:vin>,
-    // and once separately under i<asset> for asset lookup with some more associated metadata.
-    // reissuances are only kept under the history index.
-    rows.lock().unwrap().extend(issuances.into_iter().map(|(asset_id, asset_row)| DBRow {
-        key: [b"i", &asset_id.into_inner()[..]].concat(),
-        value: bincode_util::serialize_little(&asset_row).unwrap(),
-    }));
-}
-
-
 // Index mempool transaction issuances and save to in-memory store
 pub fn index_mempool_tx_assets(
     tx: &Transaction,

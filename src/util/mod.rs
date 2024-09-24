@@ -37,7 +37,6 @@ pub fn full_hash(hash: &[u8]) -> FullHash {
     *array_ref![hash, 0, HASH_LEN]
 }
 
-
 use std::sync::mpsc as crossbeam_channel;
 
 pub struct SyncChannel<T> {
