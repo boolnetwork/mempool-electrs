@@ -200,12 +200,17 @@ impl Connection {
             cookie_getter,
             addr,
             signal,
-            sgx_enable
+            sgx_enable,
         })
     }
 
     fn reconnect(&self) -> Result<Connection> {
-        Connection::new(self.addr, self.cookie_getter.clone(), self.signal.clone(), self.sgx_enable)
+        Connection::new(
+            self.addr,
+            self.cookie_getter.clone(),
+            self.signal.clone(),
+            self.sgx_enable,
+        )
     }
 
     fn send(&mut self, request: &str) -> Result<()> {
@@ -344,7 +349,7 @@ impl Daemon {
                 daemon_rpc_addr,
                 cookie_getter,
                 signal.clone(),
-                sgx_enable
+                sgx_enable,
             )?),
             message_id: Counter::new(),
             signal: signal.clone(),
@@ -364,9 +369,9 @@ impl Daemon {
             _ => {
                 if network_info.version < 16_00_00 {
                     bail!(
-                "{} is not supported - please use bitcoind 0.16+",
-                network_info.subversion,
-            )
+                        "{} is not supported - please use bitcoind 0.16+",
+                        network_info.subversion,
+                    )
                 }
             }
         }
@@ -455,9 +460,9 @@ impl Daemon {
 
     fn send_req(&self, req: &Value) -> Result<Value> {
         let addr = self.conn.lock().unwrap().addr;
-        let url = format!("http://{}",addr.to_string());
+        let url = format!("http://{}", addr.to_string());
         let cookie = self.conn.lock().unwrap().cookie_getter.get()?;
-        let auth = format!("Basic {}",base64::encode(cookie));
+        let auth = format!("Basic {}", base64::encode(cookie));
 
         crate::reg::request(url, auth, req)
     }
@@ -483,7 +488,7 @@ impl Daemon {
             let reqs = chunk.collect();
             let mut replies = if self.sgx_enable {
                 self.send_req(&reqs).map_err(|e| format!("{e:?}"))?
-            }else {
+            } else {
                 self.call_jsonrpc(method, &reqs)?
             };
             if let Some(replies_vec) = replies.as_array_mut() {
@@ -537,7 +542,7 @@ impl Daemon {
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
         if self.sgx_enable {
-            debug!("request method {}",method);
+            debug!("request method {}", method);
             let filter = crate::reg::filter_requests(method);
             if filter.is_some() {
                 return Ok(filter.unwrap());

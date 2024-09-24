@@ -46,9 +46,9 @@ fn main() {
     let chain = ChainQuery::new(Arc::clone(&store), Arc::clone(&daemon), &config, &metrics);
 
     let mut indexer = Indexer::open(Arc::clone(&store), FetchFrom::Bitcoind, &config, &metrics);
-    if config.sgx_enable{
+    if config.sgx_enable {
         indexer.sgx_update(&daemon).unwrap();
-    }else {
+    } else {
         indexer.update(&daemon).unwrap();
     }
 

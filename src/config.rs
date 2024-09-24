@@ -326,7 +326,6 @@ impl Config {
                     .help("enable sgx and using random secret key")
                     .takes_value(false));
 
-                
         #[cfg(unix)]
         let args = args.arg(
                 Arg::with_name("http_socket_file")
@@ -529,7 +528,7 @@ impl Config {
             });
         match network_type {
             #[cfg(not(feature = "liquid"))]
-            Network::Bitcoin | Network::Fractal | Network::FractalTestnet=> (),
+            Network::Bitcoin | Network::Fractal | Network::FractalTestnet => (),
             #[cfg(not(feature = "liquid"))]
             Network::Testnet => daemon_dir.push("testnet3"),
             #[cfg(not(feature = "liquid"))]
@@ -575,7 +574,9 @@ impl Config {
         let subclient_url = m.value_of("subclient_url").expect("subclient_url");
         let device_owner = m.value_of("device_owner").expect("device_owner");
         let watcher_device_id = m.value_of("watcher_device_id").expect("watcher_device_id");
-        let relate_device_id_test = m.value_of("relate_device_id_test").expect("relate_device_id_test");
+        let relate_device_id_test = m
+            .value_of("relate_device_id_test")
+            .expect("relate_device_id_test");
 
         let config = Config {
             log,
@@ -641,7 +642,7 @@ impl Config {
                     .exit(),
                 },
             ),
-            
+
             subclient_url: subclient_url.to_string(),
             warn_time: value_t_or_exit!(m, "warn_time", u16),
             config_version: value_t_or_exit!(m, "config_version", u16),
