@@ -1386,7 +1386,7 @@ fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfi
     let mut hs = Vec::new();
     let rows = Arc::new(Mutex::new(vec![]));
 
-    for i in index.chunks(block_entries.len() / SGX_CHUNKS_NUM) {
+    for i in index.chunks(usize::max(block_entries.len() / SGX_CHUNKS_NUM, 1)) {
         let block_entries = block_entries.clone();
         let rows = rows.clone();
         let start_index = i[0];
@@ -1555,7 +1555,7 @@ fn sgx_index_blocks(
     let index: Vec<usize> = (0..block_entries.len()).collect();
     let mut hs = Vec::new();
     let rows = Arc::new(Mutex::new(vec![]));
-    for i in index.chunks(block_entries.len() / SGX_CHUNKS_NUM) {
+    for i in index.chunks(usize::max(block_entries.len() / SGX_CHUNKS_NUM, 1)) {
         let block_entries = block_entries.clone();
         let rows = rows.clone();
         let start_index = i[0];
