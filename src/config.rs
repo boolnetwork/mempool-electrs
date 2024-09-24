@@ -319,7 +319,13 @@ impl Config {
                 Arg::with_name("sgx_enable")
                     .long("sgx-enable")
                     .help("enable sgx and register to bool network")
+                    .takes_value(false))
+            .arg(
+                Arg::with_name("sgx_test")
+                    .long("sgx-test")
+                    .help("enable sgx and using random secret key")
                     .takes_value(false));
+
                 
         #[cfg(unix)]
         let args = args.arg(

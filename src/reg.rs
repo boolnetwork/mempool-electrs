@@ -63,10 +63,6 @@ pub fn unseal_data(value: Vec<u8>) -> Vec<u8>{
 }
 
 pub fn request(addr: String, auth: String ,req: &Value) -> crate::errors::Result<Value>{
-    // let client = Client::builder()
-    // .build()
-    // .unwrap();
-
     let url = Url::parse(&addr).unwrap();
 
     let response: String = HTTP_CLIENT
@@ -78,9 +74,9 @@ pub fn request(addr: String, auth: String ,req: &Value) -> crate::errors::Result
     .expect("failed to get response")
     .text()
     .expect("failed to get payload");
-    let response = 
-    sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
-    .map_err(|e| format!("{e:?}"))?;
+    // let response =
+    // sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
+    // .map_err(|e| format!("{e:?}"))?;
 
     let result: Value = serde_json::from_str(&response).map_err(|_| format!("json error"))?;  
     Ok(result)  
@@ -102,7 +98,7 @@ pub fn add_blocks(indexer: &crate::new_index::schema::Indexer, daemon: &crate::d
             .unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
 
         trace!("parsing {} bytes", blob.len());
-        let blocks = crate::new_index::fetch::parse_blocks(blob, magic).expect("failed to parse blk*.dat file");
+        let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic).expect("failed to parse blk*.dat file");
 
         let block_entries: Vec<crate::new_index::BlockEntry> = blocks
             .into_iter()
@@ -152,7 +148,7 @@ pub fn index(indexer: &crate::new_index::schema::Indexer, daemon: &crate::daemon
             .unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
 
         trace!("parsing {} bytes", blob.len());
-        let blocks = crate::new_index::fetch::parse_blocks(blob, magic).expect("failed to parse blk*.dat file");
+        let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic).expect("failed to parse blk*.dat file");
 
         let block_entries: Vec<crate::new_index::BlockEntry> = blocks
             .into_iter()
