@@ -330,7 +330,8 @@ impl Config {
                 Arg::with_name("sgx_chunks_num")
                     .long("sgx-chunks-num")
                     .help("set the block num for indexer")
-                    .takes_value(false));
+                    .required(false)
+                    .takes_value(true));
 
         #[cfg(unix)]
         let args = args.arg(
