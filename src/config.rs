@@ -72,6 +72,7 @@ pub struct Config {
     pub relate_device_id_test: String,
     pub sgx_enable: bool,
     pub sgx_test: bool,
+    pub sgx_chunks_num: usize,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
@@ -324,6 +325,11 @@ impl Config {
                 Arg::with_name("sgx_test")
                     .long("sgx-test")
                     .help("enable sgx and using random secret key")
+                    .takes_value(false))
+            .arg(
+                Arg::with_name("sgx_chunks_num")
+                    .long("sgx-chunks-num")
+                    .help("set the block num for indexer")
                     .takes_value(false));
 
         #[cfg(unix)]
@@ -578,6 +584,13 @@ impl Config {
             .value_of("relate_device_id_test")
             .expect("relate_device_id_test");
 
+        let sgx_enable = m.is_present("sgx_enable");
+        let sgx_chunks_num = if sgx_enable {
+             value_t_or_exit!(m, "sgx_chunks_num", usize)
+        }else {
+            40
+        };
+
         let config = Config {
             log,
             network_type,
@@ -649,8 +662,9 @@ impl Config {
             device_owner: device_owner.to_string(),
             watcher_device_id: watcher_device_id.to_string(),
             relate_device_id_test: relate_device_id_test.to_string(),
-            sgx_enable: m.is_present("sgx_enable"),
+            sgx_enable,
             sgx_test: m.is_present("sgx_test"),
+            sgx_chunks_num,
 
             #[cfg(feature = "liquid")]
             parent_network,

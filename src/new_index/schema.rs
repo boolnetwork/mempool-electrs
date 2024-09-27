@@ -39,8 +39,6 @@ use crate::elements::{asset, peg};
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
-const SGX_CHUNKS_NUM: usize = 40;
-
 pub struct Store {
     // TODO: should be column families
     txstore_db: DB,
@@ -186,6 +184,7 @@ struct IndexerConfig {
     address_search: bool,
     index_unspendables: bool,
     network: Network,
+    sgx_chunks_num: usize,
     #[cfg(feature = "liquid")]
     parent_network: crate::chain::BNetwork,
 }
@@ -197,6 +196,7 @@ impl From<&Config> for IndexerConfig {
             address_search: config.address_search,
             index_unspendables: config.index_unspendables,
             network: config.network_type,
+            sgx_chunks_num: config.sgx_chunks_num,
             #[cfg(feature = "liquid")]
             parent_network: config.parent_network,
         }
@@ -1386,7 +1386,7 @@ fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfi
     let mut hs = Vec::new();
     let rows = Arc::new(Mutex::new(vec![]));
 
-    for i in index.chunks(usize::max(block_entries.len() / SGX_CHUNKS_NUM, 1)) {
+    for i in index.chunks(usize::max(block_entries.len() / iconfig.sgx_chunks_num, 1)) {
         let block_entries = block_entries.clone();
         let rows = rows.clone();
         let start_index = i[0];
@@ -1555,7 +1555,7 @@ fn sgx_index_blocks(
     let index: Vec<usize> = (0..block_entries.len()).collect();
     let mut hs = Vec::new();
     let rows = Arc::new(Mutex::new(vec![]));
-    for i in index.chunks(usize::max(block_entries.len() / SGX_CHUNKS_NUM, 1)) {
+    for i in index.chunks(usize::max(block_entries.len() / iconfig.sgx_chunks_num, 1)) {
         let block_entries = block_entries.clone();
         let rows = rows.clone();
         let start_index = i[0];
