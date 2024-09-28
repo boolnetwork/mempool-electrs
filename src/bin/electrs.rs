@@ -65,7 +65,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
 
     #[cfg(not(feature = "liquid"))]
         let mut tip = if config.sgx_enable {
-        indexer.sgx_update(&daemon)?
+        indexer.update(&daemon)?
     } else {
         indexer.update(&daemon)?
     };
@@ -155,7 +155,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         if current_tip != tip {
             #[cfg(not(feature = "liquid"))]
             if config.sgx_enable {
-                indexer.sgx_update(&daemon)?;
+                indexer.update(&daemon)?;
             } else {
                 indexer.update(&daemon)?;
             }
