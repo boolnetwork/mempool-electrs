@@ -395,7 +395,8 @@ impl Indexer {
         // TODO: skip orphaned blocks?
         let rows = {
             let _timer = self.start_timer("add_process");
-            sgx_add_blocks(Arc::new(blocks.to_vec()), Arc::new(self.iconfig.clone()))
+            // sgx_add_blocks(Arc::new(blocks.to_vec()), Arc::new(self.iconfig.clone()))
+            add_blocks(blocks,&self.iconfig)
         };
         {
             let _timer = self.start_timer("add_write");

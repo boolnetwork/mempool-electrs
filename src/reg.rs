@@ -170,7 +170,7 @@ pub fn index(
             })
             .collect();
 
-        indexer.sgx_index(&block_entries);
+        indexer.index(&block_entries);
     }
 
     if !entry_map.is_empty() {
