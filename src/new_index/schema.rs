@@ -332,7 +332,7 @@ impl Indexer {
 
         let start = Instant::now();
         crate::reg::add_blocks(self, &daemon, to_add)?;
-        trace!("add_blocks cost :{:?}", Instant::now().duration_since(start));
+        debug!("add_blocks cost :{:?}", Instant::now().duration_since(start));
 
         self.start_auto_compactions(&self.store.txstore_db);
 
@@ -345,7 +345,7 @@ impl Indexer {
 
         let start = Instant::now();
         crate::reg::index(self, &daemon, to_index)?;
-        trace!("index cost :{:?}", Instant::now().duration_since(start));
+        debug!("index cost :{:?}", Instant::now().duration_since(start));
 
         self.start_auto_compactions(&self.store.history_db);
 
