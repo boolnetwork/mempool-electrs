@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use bitcoin::{Block, TxMerkleNode};
 
@@ -118,8 +119,9 @@ pub fn add_blocks(
                 }
             })
             .collect();
-
+        let start = Instant::now();
         indexer.sgx_add(&block_entries);
+        debug!("sgx_add {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
     }
 
     if !entry_map.is_empty() {
@@ -170,7 +172,10 @@ pub fn index(
             })
             .collect();
 
+        let start = Instant::now();
         indexer.index(&block_entries);
+        debug!("index {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
+
     }
 
     if !entry_map.is_empty() {
