@@ -99,7 +99,7 @@ pub fn add_blocks(
             std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
 
         trace!("parsing {} bytes", blob.len());
-        let blocks = crate::new_index::fetch::parse_blocks(blob, magic)
+        let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
             .expect("failed to parse blk*.dat file");
 
         let block_entries: Vec<crate::new_index::BlockEntry> = blocks
@@ -150,7 +150,7 @@ pub fn index(
             std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
 
         trace!("parsing {} bytes", blob.len());
-        let blocks = crate::new_index::fetch::parse_blocks(blob, magic)
+        let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
             .expect("failed to parse blk*.dat file");
 
         let block_entries: Vec<crate::new_index::BlockEntry> = blocks

@@ -264,7 +264,7 @@ pub fn sgx_parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     }
 
     let data: Vec<SizedBlock> = slices
-        .into_iter()
+        .into_par_iter()
         .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
         .collect();
 
