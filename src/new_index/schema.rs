@@ -18,6 +18,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 use crate::chain::{
     BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value,
@@ -329,7 +330,10 @@ impl Indexer {
             self.from
         );
 
+        let start = Instant::now();
         crate::reg::add_blocks(self, &daemon, to_add)?;
+        trace!("add_blocks cost :{:?}", Instant::now().duration_since(start));
+
         self.start_auto_compactions(&self.store.txstore_db);
 
         let to_index = self.headers_to_index(&new_headers);
@@ -339,7 +343,10 @@ impl Indexer {
             self.from
         );
 
+        let start = Instant::now();
         crate::reg::index(self, &daemon, to_index)?;
+        trace!("index cost :{:?}", Instant::now().duration_since(start));
+
         self.start_auto_compactions(&self.store.history_db);
 
         if let DBFlush::Disable = self.flush {
