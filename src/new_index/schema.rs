@@ -272,6 +272,7 @@ impl Indexer {
     }
 
     pub fn update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
+        debug!("update");
         let daemon = daemon.reconnect()?;
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
@@ -319,6 +320,7 @@ impl Indexer {
     }
 
     pub fn sgx_update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
+        debug!("sgx_update");
         let daemon = daemon.reconnect()?;
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
