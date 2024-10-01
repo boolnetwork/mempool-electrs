@@ -173,7 +173,7 @@ pub fn index(
             .collect();
 
         let start = Instant::now();
-        indexer.index(&block_entries);
+        indexer.sgx_index(&block_entries);
         debug!("index {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
 
     }
