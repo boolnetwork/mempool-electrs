@@ -1390,7 +1390,7 @@ fn sgx_add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<
     let max_threads = 20;
     let chunk_size = (block_entries.len() + max_threads - 1) / max_threads;
 
-    let block_chunks: Vec<_> = block_entries.chunks(chunk_size).map(|chunk| chunk.to_vec()).collect();
+    let block_chunks: Vec<_> = block_entries.chunks(chunk_size.max(1)).map(|chunk| chunk.to_vec()).collect();
 
     let combined_rows: Arc<Mutex<Vec<DBRow>>> = Arc::new(Mutex::new(Vec::new()));
 
