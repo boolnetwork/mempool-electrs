@@ -168,59 +168,37 @@ pub fn add_blocks_blkfiles(
     let magic = daemon.magic();
     let blk_files = daemon.list_blk_files()?;
 
-    // let mut entry_map: HashMap<bitcoin::hash_types::BlockHash, HeaderEntry> =
-    //     new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
-    let entry_map: Arc<DashMap<BlockHash,HeaderEntry>> = Arc::new(
-        new_headers.into_iter().map(|h| (*h.hash(), h)).collect()
-    );
-    let combined_block_entries: Arc<Mutex<Vec<BlockEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let max_threads = 20;
-    let chunk_size = (blk_files.len() + max_threads - 1) / max_threads;
-    let blk_file_chunks: Vec<_> = blk_files.chunks(chunk_size).map(|chunk| chunk.to_vec()).collect();
+    let mut entry_map: HashMap<bitcoin::hash_types::BlockHash, HeaderEntry> =
+        new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
-    let mut handles = vec![];
+    for path in blk_files {
+        trace!("reading {:?}", path);
+        let blob =
+            std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
 
-    for chunk in blk_file_chunks {
-        let entry_map = Arc::clone(&entry_map);
-        let combined_block_entries = Arc::clone(&combined_block_entries);
+        trace!("parsing {} bytes", blob.len());
+        let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
+            .expect("failed to parse blk*.dat file");
 
-        let handle = thread::spawn(move || {
-            for path in chunk {
-                trace!("reading {:?}", path);
-                let blob =
-                    std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
+        let block_entries: Vec<crate::new_index::BlockEntry> = blocks
+            .into_iter()
+            .filter_map(|(block, size)| {
+                let blockhash = block.block_hash();
 
-                trace!("parsing {} bytes", blob.len());
-                let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
-                    .expect("failed to parse blk*.dat file");
-                let mut thread_block_entries: Vec<crate::new_index::BlockEntry> = vec![];
-
-                for (block, size) in blocks {
-                    let blockhash = block.block_hash();
-                    if let Some((_, entry)) = entry_map.remove(&blockhash) {
-                        crate::reg::validate_tx_root(&block, &entry);
-                        thread_block_entries.push(crate::new_index::BlockEntry {
-                            block,
-                            entry,
-                            size,
-                        });
-                    }else {
-                        trace!("skipping block {}", blockhash);
-                    }
+                if entry_map.contains_key(&blockhash) {
+                    crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
+                    entry_map
+                        .remove(&blockhash)
+                        .map(|entry| crate::new_index::BlockEntry { block, entry, size })
+                } else {
+                    trace!("skipping block {}", blockhash);
+                    None
                 }
-
-                // let start = Instant::now();
-                // indexer.sgx_add(&block_entries);
-                // debug!("sgx_add {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
-                let mut combined_entries = combined_block_entries.lock().unwrap();
-                combined_entries.extend(thread_block_entries);
-            }
-        });
-        handles.push(handle);
-    }
-
-    for handle in handles {
-        handle.join().unwrap();
+            })
+            .collect();
+        let start = Instant::now();
+        indexer.sgx_add(&block_entries);
+        debug!("sgx_add {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
     }
 
     if !entry_map.is_empty() {
@@ -229,15 +207,6 @@ pub fn add_blocks_blkfiles(
             entry_map.len()
         )
     }
-
-    let combined_block_entries = combined_block_entries.lock().unwrap();
-    let start = Instant::now();
-    indexer.sgx_add(&combined_block_entries);
-    debug!(
-        "sgx_add {} blocks cost: {:?}",
-        combined_block_entries.len(),
-        Instant::now().duration_since(start)
-    );
 
     Ok(())
 }
