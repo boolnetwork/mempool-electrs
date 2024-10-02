@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use crate::chain::{
@@ -185,7 +185,6 @@ struct IndexerConfig {
     address_search: bool,
     index_unspendables: bool,
     network: Network,
-    sgx_chunks_num: usize,
     #[cfg(feature = "liquid")]
     parent_network: crate::chain::BNetwork,
 }
@@ -197,7 +196,6 @@ impl From<&Config> for IndexerConfig {
             address_search: config.address_search,
             index_unspendables: config.index_unspendables,
             network: config.network_type,
-            sgx_chunks_num: config.sgx_chunks_num,
             #[cfg(feature = "liquid")]
             parent_network: config.parent_network,
         }
@@ -269,6 +267,10 @@ impl Indexer {
             info!("{:?} ({} left to index)", tip, result.len());
         };
         Ok(result)
+    }
+
+    pub fn fetch_from(&self) -> FetchFrom {
+        self.from
     }
 
     pub fn update(&mut self, daemon: &Daemon) -> Result<BlockHash> {
@@ -1383,56 +1385,6 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
         .collect()
 }
 
-fn sgx_add_blocks(block_entries: Arc<Vec<BlockEntry>>, iconfig: Arc<IndexerConfig>) -> Vec<DBRow> {
-    // persist individual transactions:
-    //      T{txid} → {rawtx}
-    //      C{txid}{blockhash}{height} →
-    //      O{txid}{index} → {txout}
-    // persist block headers', block txids' and metadata rows:
-    //      B{blockhash} → {header}
-    //      X{blockhash} → {txid1}...{txidN}
-    //      M{blockhash} → {tx_count}{size}{weight}
-
-    let index: Vec<usize> = (0..block_entries.len()).collect();
-    let mut hs = Vec::new();
-    let rows = Arc::new(Mutex::new(vec![]));
-
-    for i in index.chunks(usize::max(block_entries.len() / iconfig.sgx_chunks_num, 1)) {
-        let block_entries = block_entries.clone();
-        let rows = rows.clone();
-        let start_index = i[0];
-        let offset = i.len();
-        let iconfig = iconfig.clone();
-
-        let h = std::thread::spawn(move || {
-            let mut rows_split = vec![];
-            for i in start_index..start_index + offset {
-                let b = &block_entries[i];
-                let blockhash = full_hash(&b.entry.hash()[..]);
-                let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
-                for tx in &b.block.txdata {
-                    sgx_add_transaction(tx, blockhash, &mut rows_split, iconfig.clone());
-                }
-
-                if !iconfig.light_mode {
-                    rows_split.push(BlockRow::new_txids(blockhash, &txids).into_row());
-                    rows_split.push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
-                }
-
-                rows_split.push(BlockRow::new_header(b).into_row());
-                rows_split.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
-            }
-            rows.lock().unwrap().extend_from_slice(&rows_split);
-        });
-
-        hs.push(h);
-    }
-
-    hs.into_iter().for_each(|h| h.join().unwrap());
-    let re = rows.lock().unwrap().to_vec();
-    re
-}
-
 fn add_transaction(
     tx: &Transaction,
     blockhash: FullHash,
@@ -1575,49 +1527,6 @@ fn index_blocks(
         })
         .flatten()
         .collect()
-}
-
-fn sgx_index_blocks(
-    block_entries: Arc<Vec<BlockEntry>>,
-    previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
-    iconfig: Arc<IndexerConfig>,
-) -> Vec<DBRow> {
-    let index: Vec<usize> = (0..block_entries.len()).collect();
-    let mut hs = Vec::new();
-    let rows = Arc::new(Mutex::new(vec![]));
-    for i in index.chunks(usize::max(block_entries.len() / iconfig.sgx_chunks_num, 1)) {
-        let block_entries = block_entries.clone();
-        let rows = rows.clone();
-        let start_index = i[0];
-        let offset = i.len();
-        let iconfig = iconfig.clone();
-        let previous_txos_map = previous_txos_map.clone();
-
-        let h = std::thread::spawn(move || {
-            let mut rows_split = vec![];
-            for i in start_index..start_index + offset {
-                let b = &block_entries[i];
-                let height = b.entry.height() as u32;
-                for (idx, tx) in b.block.txdata.iter().enumerate() {
-                    sgx_index_transaction(
-                        tx,
-                        height,
-                        idx as u16,
-                        previous_txos_map.clone(),
-                        &mut rows_split,
-                        iconfig.clone(),
-                    )
-                }
-                rows_split.push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row());
-                // mark block as "indexed"
-            }
-            rows.lock().unwrap().extend_from_slice(&rows_split);
-        });
-        hs.push(h);
-    }
-    hs.into_iter().for_each(|h| h.join().unwrap());
-    let re = rows.lock().unwrap().to_vec();
-    re
 }
 
 // TODO: return an iterator?

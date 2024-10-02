@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use bitcoin::{Block, TxMerkleNode};
+use bitcoin::{Block, BlockHash, TxMerkleNode};
 
 use crate::util::HeaderEntry;
 
 use reqwest::{blocking::Client, Url};
 use serde_json::Value;
+use crate::new_index::{BlockEntry, FetchFrom};
+#[cfg(not(feature = "liquid"))]
+use crate::chain::Network::{Fractal, FractalTestnet};
 
 lazy_static! {
     static ref HTTP_CLIENT: Client = Client::new();
@@ -83,6 +86,77 @@ pub fn request(addr: String, auth: String, req: &Value) -> crate::errors::Result
 }
 
 pub fn add_blocks(
+    indexer: &crate::new_index::schema::Indexer,
+    daemon: &crate::daemon::Daemon,
+    new_headers: Vec<HeaderEntry>,
+) -> crate::errors::Result<()> {
+    match indexer.fetch_from() {
+        FetchFrom::Bitcoind => {
+            add_blocks_bitcoind(
+                indexer,
+                daemon,
+                new_headers,
+            )
+        }
+        FetchFrom::BlkFiles => {
+            add_blocks_blkfiles(
+                indexer,
+                daemon,
+                new_headers,
+            )
+        }
+    }
+}
+
+pub fn add_blocks_bitcoind(
+    indexer: &crate::new_index::schema::Indexer,
+    daemon: &crate::daemon::Daemon,
+    new_headers: Vec<HeaderEntry>,
+) -> crate::errors::Result<()> {
+    if let Some(tip) = new_headers.last() {
+        debug!("{:?} ({} left to index)", tip, new_headers.len());
+    };
+    let daemon = daemon.reconnect()?;
+
+    for entries in new_headers.chunks(100) {
+        let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
+        #[cfg(not(feature = "liquid"))]
+            let blocks = match daemon.network() {
+            Fractal | FractalTestnet => daemon
+                .get_fractal_bocks(&blockhashes)
+                .expect("failed to get blocks from bitcoind"),
+            _ => daemon
+                .getblocks(&blockhashes)
+                .expect("failed to get blocks from bitcoind"),
+        };
+
+        #[cfg(feature = "liquid")]
+            let blocks = daemon
+            .getblocks(&blockhashes)
+            .expect("failed to get blocks from bitcoind");
+
+        assert_eq!(blocks.len(), entries.len());
+
+        let block_entries: Vec<BlockEntry> = blocks
+            .into_iter()
+            .zip(entries)
+            .map(|(block, entry)| BlockEntry {
+                entry: entry.clone(), // TODO: remove this clone()
+                size: block.size() as u32,
+                block,
+            })
+            .collect();
+        assert_eq!(block_entries.len(), entries.len());
+
+        let start = Instant::now();
+        indexer.sgx_add(&block_entries);
+        debug!("sgx_add {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
+    }
+
+    Ok(())
+}
+
+pub fn add_blocks_blkfiles(
     indexer: &crate::new_index::schema::Indexer,
     daemon: &crate::daemon::Daemon,
     new_headers: Vec<HeaderEntry>,
@@ -175,7 +249,6 @@ pub fn index(
         let start = Instant::now();
         indexer.sgx_index(&block_entries);
         debug!("index {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
-
     }
 
     if !entry_map.is_empty() {
