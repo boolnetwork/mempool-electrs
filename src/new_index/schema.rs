@@ -17,7 +17,8 @@ use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
 use std::time::Instant;
 
 use crate::chain::{
@@ -407,7 +408,7 @@ impl Indexer {
         let rows = {
             let _timer = self.start_timer("add_process");
             // sgx_add_blocks(Arc::new(blocks.to_vec()), Arc::new(self.iconfig.clone()))
-            add_blocks(blocks,&self.iconfig)
+            sgx_add_blocks(blocks,&self.iconfig)
         };
         {
             let _timer = self.start_timer("add_write");
@@ -1383,6 +1384,54 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
         })
         .flatten()
         .collect()
+}
+
+fn sgx_add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRow>  {
+    let max_threads = 20;
+    let chunk_size = (block_entries.len() + max_threads - 1) / max_threads;
+
+    let block_chunks: Vec<_> = block_entries.chunks(chunk_size).map(|chunk| chunk.to_vec()).collect();
+
+    let combined_rows: Arc<Mutex<Vec<DBRow>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let mut handles = vec![];
+
+    for chunk in block_chunks {
+        let combined_rows = Arc::clone(&combined_rows);
+        let iconfig = iconfig.clone();
+        let handle = thread::spawn(move || {
+            let mut local_rows = vec![];
+
+            for b in chunk {
+                let blockhash = full_hash(&b.entry.hash()[..]);
+                let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
+
+                for tx in &b.block.txdata {
+                    add_transaction(tx, blockhash, &mut local_rows, &iconfig);
+                }
+
+                if !iconfig.light_mode {
+                    local_rows.push(BlockRow::new_txids(blockhash, &txids).into_row());
+                    local_rows.push(BlockRow::new_meta(blockhash, &BlockMeta::from(&b)).into_row());
+                }
+
+                local_rows.push(BlockRow::new_header(&b).into_row());
+                local_rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+            }
+
+            let mut combined_rows = combined_rows.lock().unwrap();
+            combined_rows.extend(local_rows);
+        });
+
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let combined_rows = Arc::try_unwrap(combined_rows).unwrap().into_inner().unwrap();
+    combined_rows
 }
 
 fn add_transaction(
