@@ -1363,20 +1363,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashmap"
-version = "6.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
-dependencies = [
- "cfg-if 1.0.0",
- "crossbeam-utils",
- "hashbrown 0.14.5",
- "lock_api 0.4.12",
- "once_cell",
- "parking_lot_core 0.9.10",
-]
-
-[[package]]
 name = "der"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2955,7 +2941,6 @@ dependencies = [
  "byteorder",
  "clap",
  "crossbeam-channel",
- "dashmap",
  "dirs",
  "electrum-client",
  "elements",
@@ -2972,6 +2957,7 @@ dependencies = [
  "num_cpus",
  "ordinals",
  "page_size",
+ "parking_lot 0.12.3",
  "prometheus",
  "rayon",
  "reqwest",

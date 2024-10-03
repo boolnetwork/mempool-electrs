@@ -455,7 +455,7 @@ impl Indexer {
         debug!("Indexing {} blocks with Indexer", blocks.len());
         let previous_txos_map = {
             let _timer = self.start_timer("index_lookup");
-            sgx_lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
+            sgx_lookup_txos(self.store.clone(), get_previous_txos(blocks), false)
         };
         let rows = {
             let _timer = self.start_timer("index_process");
@@ -1511,7 +1511,7 @@ fn lookup_txos(
     };
     pool.install(|| {
         outpoints
-            .iter()
+            .par_iter()
             .filter_map(|outpoint| {
                 lookup_txo(txstore_db, outpoint)
                     .or_else(|| {
@@ -1527,22 +1527,48 @@ fn lookup_txos(
 }
 
 fn sgx_lookup_txos(
-    txstore_db: &DB,
-    outpoints: &BTreeSet<OutPoint>,
+    txstore: Arc<Store>,
+    outpoints: BTreeSet<OutPoint>,
     allow_missing: bool,
 ) -> HashMap<OutPoint, TxOut> {
-    outpoints.par_iter()
-        .filter_map(|outpoint|{
-            lookup_txo(txstore_db, outpoint)
-                .or_else(|| {
-                    if !allow_missing {
-                        panic!("missing txo {} in {:?}", outpoint, txstore_db);
-                    }
-                    None
+    let max_threads = 10;
+    let chunk_size = (outpoints.len() + max_threads - 1) / max_threads;
+    let outpoint_chunks: Vec<_> = outpoints
+        .into_iter()
+        .collect::<Vec<_>>()
+        .chunks(chunk_size.max(1))
+        .map(|chunk| chunk.to_vec())
+        .collect();
+
+    let mut handles = vec![];
+
+    for chunk in outpoint_chunks {
+        let txstore = Arc::clone(&txstore);
+
+        let handle = thread::spawn(move || {
+            chunk.into_iter()
+                .filter_map(|outpoint| {
+                    lookup_txo(&txstore.txstore_db, &outpoint)
+                        .or_else(|| {
+                            if !allow_missing {
+                                panic!("missing txo {} in {:?}", outpoint, &txstore.txstore_db);
+                            }
+                            None
+                        })
+                        .map(|txo| (outpoint, txo))
                 })
-                .map(|txo| (*outpoint, txo))
-        })
-        .collect()
+                .collect::<HashMap<OutPoint, TxOut>>()
+        });
+
+        handles.push(handle);
+    }
+
+    let mut final_results = HashMap::new();
+    for handle in handles {
+        let result = handle.join().unwrap();
+        final_results.extend(result);
+    }
+    final_results
 }
 
 fn lookup_txo(txstore_db: &DB, outpoint: &OutPoint) -> Option<TxOut> {
