@@ -1,10 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Instant;
 
 use bitcoin::{Block, BlockHash, TxMerkleNode};
-use dashmap::DashMap;
 
 use crate::util::HeaderEntry;
 
