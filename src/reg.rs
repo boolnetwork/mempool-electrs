@@ -217,48 +217,93 @@ pub fn index(
     new_headers: Vec<HeaderEntry>,
 ) -> crate::errors::Result<()> {
     // fetch
-    let magic = daemon.magic();
-    let blk_files = daemon.list_blk_files()?;
+    match indexer.fetch_from() {
+        FetchFrom::Bitcoind => {
+            if let Some(tip) = new_headers.last() {
+                debug!("{:?} ({} left to index)", tip, new_headers.len());
+            };
+            let daemon = daemon.reconnect()?;
 
-    let mut entry_map: HashMap<bitcoin::hash_types::BlockHash, HeaderEntry> =
-        new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
+            for entries in new_headers.chunks(100) {
+                let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
+                #[cfg(not(feature = "liquid"))]
+                    let blocks = match daemon.network() {
+                    Fractal | FractalTestnet => daemon
+                        .get_fractal_bocks(&blockhashes)
+                        .expect("failed to get blocks from bitcoind"),
+                    _ => daemon
+                        .getblocks(&blockhashes)
+                        .expect("failed to get blocks from bitcoind"),
+                };
 
-    for path in blk_files {
-        trace!("reading {:?}", path);
-        let blob =
-            std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
+                #[cfg(feature = "liquid")]
+                    let blocks = daemon
+                    .getblocks(&blockhashes)
+                    .expect("failed to get blocks from bitcoind");
 
-        trace!("parsing {} bytes", blob.len());
-        let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
-            .expect("failed to parse blk*.dat file");
+                assert_eq!(blocks.len(), entries.len());
 
-        let block_entries: Vec<crate::new_index::BlockEntry> = blocks
-            .into_iter()
-            .filter_map(|(block, size)| {
-                let blockhash = block.block_hash();
+                let block_entries: Vec<BlockEntry> = blocks
+                    .into_iter()
+                    .zip(entries)
+                    .map(|(block, entry)| BlockEntry {
+                        entry: entry.clone(), // TODO: remove this clone()
+                        size: block.size() as u32,
+                        block,
+                    })
+                    .collect();
+                assert_eq!(block_entries.len(), entries.len());
 
-                if entry_map.contains_key(&blockhash) {
-                    crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
-                    entry_map
-                        .remove(&blockhash)
-                        .map(|entry| crate::new_index::BlockEntry { block, entry, size })
-                } else {
-                    trace!("skipping block {}", blockhash);
-                    None
-                }
-            })
-            .collect();
+                let start = Instant::now();
+                indexer.sgx_index(&block_entries);
+                debug!("sgx_add {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
+            }
+        }
+        FetchFrom::BlkFiles => {
+            let magic = daemon.magic();
+            let blk_files = daemon.list_blk_files()?;
 
-        let start = Instant::now();
-        indexer.sgx_index(&block_entries);
-        debug!("index {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
-    }
+            let mut entry_map: HashMap<bitcoin::hash_types::BlockHash, HeaderEntry> =
+                new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
-    if !entry_map.is_empty() {
-        panic!(
-            "failed to index {} blocks from blk*.dat files",
-            entry_map.len()
-        )
+            for path in blk_files {
+                trace!("reading {:?}", path);
+                let blob =
+                    std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
+
+                trace!("parsing {} bytes", blob.len());
+                let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
+                    .expect("failed to parse blk*.dat file");
+
+                let block_entries: Vec<crate::new_index::BlockEntry> = blocks
+                    .into_iter()
+                    .filter_map(|(block, size)| {
+                        let blockhash = block.block_hash();
+
+                        if entry_map.contains_key(&blockhash) {
+                            crate::reg::validate_tx_root(&block, &entry_map[&blockhash]);
+                            entry_map
+                                .remove(&blockhash)
+                                .map(|entry| crate::new_index::BlockEntry { block, entry, size })
+                        } else {
+                            trace!("skipping block {}", blockhash);
+                            None
+                        }
+                    })
+                    .collect();
+
+                let start = Instant::now();
+                indexer.sgx_index(&block_entries);
+                debug!("index {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
+            }
+
+            if !entry_map.is_empty() {
+                panic!(
+                    "failed to index {} blocks from blk*.dat files",
+                    entry_map.len()
+                )
+            }
+        }
     }
 
     Ok(())
