@@ -453,12 +453,16 @@ impl Indexer {
 
     pub fn sgx_index(&self, blocks: &[BlockEntry]) {
         debug!("Indexing {} blocks with Indexer", blocks.len());
+        let mut start = Instant::now();
         let previous_txos_map = {
             let _timer = self.start_timer("index_lookup");
             sgx_lookup_txos(self.store.clone(), get_previous_txos(blocks), false)
         };
+        trace!("sgx_lookup_txos cost: {:?}", Instant::now().duration_since(start));
+
         let rows = {
             let _timer = self.start_timer("index_process");
+            start = Instant::now();
             let added_blockhashes = self.store.added_blockhashes.read().unwrap();
             for b in blocks {
                 if b.entry.height() % 10_000 == 0 {
@@ -470,7 +474,12 @@ impl Indexer {
                     panic!("cannot index block {} (missing from store)", blockhash);
                 }
             }
-            index_blocks(blocks, &previous_txos_map, &self.iconfig)
+            trace!("check added_blockhashes cost: {:?}", Instant::now().duration_since(start));
+
+            start = Instant::now();
+            let rows = index_blocks(blocks, &previous_txos_map, &self.iconfig);
+            trace!("index_blocks cost: {:?}", Instant::now().duration_since(start));
+            rows
             // sgx_index_blocks(
             //     Arc::new(blocks.to_vec()),
             //     previous_txos_map,
