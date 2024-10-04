@@ -2266,3 +2266,20 @@ mod tests {
         );
     }
 }
+
+#[test]
+fn test_iter_and_pariter() {
+    let a: Vec<_> = (0..100_000_000).collect();
+
+    let start = Instant::now();
+    a.par_iter().map(|x| {
+        x * 2
+    }).for_each(drop);
+    println!("par_iter duration: {:?}", Instant::now().duration_since(start));
+
+    let start = Instant::now();
+    a.iter().map(|x| {
+        x * 2
+    }).for_each(drop);
+    println!("iter duration: {:?}", Instant::now().duration_since(start));
+}
