@@ -1540,44 +1540,25 @@ fn sgx_lookup_txos(
     outpoints: BTreeSet<OutPoint>,
     allow_missing: bool,
 ) -> HashMap<OutPoint, TxOut> {
-    let max_threads = 20;
-    let chunk_size = (outpoints.len() + max_threads - 1) / max_threads;
-    let outpoint_chunks: Vec<_> = outpoints
-        .into_iter()
-        .collect::<Vec<_>>()
-        .chunks(chunk_size.max(1))
-        .map(|chunk| chunk.to_vec())
-        .collect();
+    let pool = threadpool::ThreadPool::new(16);
+    let final_results = Arc::new(Mutex::new(HashMap::new()));
 
-    let mut handles = vec![];
-
-    for chunk in outpoint_chunks {
+    for outpoint in outpoints {
+        let final_results = Arc::clone(&final_results);
         let txstore = Arc::clone(&txstore);
-
-        let handle = thread::spawn(move || {
-            chunk.into_iter()
-                .filter_map(|outpoint| {
-                    lookup_txo(&txstore.txstore_db, &outpoint)
-                        .or_else(|| {
-                            if !allow_missing {
-                                panic!("missing txo {} in {:?}", outpoint, &txstore.txstore_db);
-                            }
-                            None
-                        })
-                        .map(|txo| (outpoint, txo))
-                })
-                .collect::<HashMap<OutPoint, TxOut>>()
+        pool.execute(move || {
+            if let Some(txo) = lookup_txo(&txstore.txstore_db, &outpoint) {
+                // 插入结果到最终结果中
+                let mut results = final_results.lock().unwrap();
+                results.insert(outpoint, txo);
+            } else if !allow_missing {
+                panic!("missing txo {} in {:?}", outpoint, &txstore.txstore_db);
+            }
         });
-
-        handles.push(handle);
     }
 
-    let mut final_results = HashMap::new();
-    for handle in handles {
-        let result = handle.join().unwrap();
-        final_results.extend(result);
-    }
-    final_results
+    pool.join();
+    Arc::try_unwrap(final_results).unwrap().into_inner().unwrap()
 }
 
 fn lookup_txo(txstore_db: &DB, outpoint: &OutPoint) -> Option<TxOut> {
