@@ -477,7 +477,7 @@ impl Indexer {
             trace!("check added_blockhashes cost: {:?}", Instant::now().duration_since(start));
 
             start = Instant::now();
-            let rows = index_blocks(blocks, &previous_txos_map, &self.iconfig);
+            let rows = sgx_index_blocks(blocks, Arc::new(previous_txos_map), &self.iconfig);
             trace!("index_blocks cost: {:?}", Instant::now().duration_since(start));
             rows
             // sgx_index_blocks(
@@ -1540,7 +1540,7 @@ fn sgx_lookup_txos(
     outpoints: BTreeSet<OutPoint>,
     allow_missing: bool,
 ) -> HashMap<OutPoint, TxOut> {
-    let max_threads = 10;
+    let max_threads = 20;
     let chunk_size = (outpoints.len() + max_threads - 1) / max_threads;
     let outpoint_chunks: Vec<_> = outpoints
         .into_iter()
@@ -1611,6 +1611,56 @@ fn index_blocks(
         })
         .flatten()
         .collect()
+}
+
+fn sgx_index_blocks(
+    block_entries: &[BlockEntry],
+    previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
+    iconfig: &IndexerConfig,
+) -> Vec<DBRow> {
+    let max_threads = 20;
+    let chunk_size = (block_entries.len() + max_threads - 1) / max_threads;
+
+    let block_chunks: Vec<_> = block_entries.chunks(chunk_size.max(1)).map(|chunk| chunk.to_vec()).collect();
+
+    let combined_rows: Arc<Mutex<Vec<DBRow>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let mut handles = vec![];
+
+    for chunk in block_chunks {
+        let combined_rows = Arc::clone(&combined_rows);
+        let previous_txos_map = Arc::clone(&previous_txos_map);
+        let iconfig = iconfig.clone();
+        let handle = thread::spawn(
+            move || {
+                let mut local_rows = vec![];
+
+                for b in chunk {
+                    for (idx, tx) in b.block.txdata.iter().enumerate() {
+                        let height = b.entry.height() as u32;
+                        index_transaction(
+                            tx,
+                            height,
+                            idx as u16,
+                            &previous_txos_map,
+                            &mut local_rows,
+                            &iconfig,
+                        );
+                    }
+                    local_rows.push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row()); // mark block as "indexed"
+                }
+                let mut combined_rows = combined_rows.lock().unwrap();
+                combined_rows.extend(local_rows);
+            });
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let combined_rows = Arc::try_unwrap(combined_rows).unwrap().into_inner().unwrap();
+    combined_rows
 }
 
 // TODO: return an iterator?
