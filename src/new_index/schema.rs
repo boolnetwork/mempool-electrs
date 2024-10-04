@@ -17,8 +17,7 @@ use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use crate::chain::{
@@ -456,7 +455,7 @@ impl Indexer {
         let mut start = Instant::now();
         let previous_txos_map = {
             let _timer = self.start_timer("index_lookup");
-            sgx_lookup_txos(self.store.clone(), get_previous_txos(blocks), false)
+            sgx_lookup_txos(&self.store.txstore_db, get_previous_txos(blocks), false)
         };
         trace!("sgx_lookup_txos cost: {:?}", Instant::now().duration_since(start));
 
@@ -477,14 +476,9 @@ impl Indexer {
             trace!("check added_blockhashes cost: {:?}", Instant::now().duration_since(start));
 
             start = Instant::now();
-            let rows = sgx_index_blocks(blocks, Arc::new(previous_txos_map), &self.iconfig);
+            let rows = index_blocks(blocks, &previous_txos_map, &self.iconfig);
             trace!("index_blocks cost: {:?}", Instant::now().duration_since(start));
             rows
-            // sgx_index_blocks(
-            //     Arc::new(blocks.to_vec()),
-            //     previous_txos_map,
-            //     Arc::new(self.iconfig.clone()),
-            // )
         };
         self.store.history_db.write(rows, self.flush);
     }
@@ -1395,79 +1389,11 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
         .collect()
 }
 
-fn sgx_add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRow>  {
-    let max_threads = 20;
-    let chunk_size = (block_entries.len() + max_threads - 1) / max_threads;
-
-    let block_chunks: Vec<_> = block_entries.chunks(chunk_size.max(1)).map(|chunk| chunk.to_vec()).collect();
-
-    let combined_rows: Arc<Mutex<Vec<DBRow>>> = Arc::new(Mutex::new(Vec::new()));
-
-    let mut handles = vec![];
-
-    for chunk in block_chunks {
-        let combined_rows = Arc::clone(&combined_rows);
-        let iconfig = iconfig.clone();
-        let handle = thread::spawn(move || {
-            let mut local_rows = vec![];
-
-            for b in chunk {
-                let blockhash = full_hash(&b.entry.hash()[..]);
-                let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
-
-                for tx in &b.block.txdata {
-                    add_transaction(tx, blockhash, &mut local_rows, &iconfig);
-                }
-
-                if !iconfig.light_mode {
-                    local_rows.push(BlockRow::new_txids(blockhash, &txids).into_row());
-                    local_rows.push(BlockRow::new_meta(blockhash, &BlockMeta::from(&b)).into_row());
-                }
-
-                local_rows.push(BlockRow::new_header(&b).into_row());
-                local_rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
-            }
-
-            let mut combined_rows = combined_rows.lock().unwrap();
-            combined_rows.extend(local_rows);
-        });
-
-        handles.push(handle);
-    }
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    let combined_rows = Arc::try_unwrap(combined_rows).unwrap().into_inner().unwrap();
-    combined_rows
-}
-
 fn add_transaction(
     tx: &Transaction,
     blockhash: FullHash,
     rows: &mut Vec<DBRow>,
     iconfig: &IndexerConfig,
-) {
-    rows.push(TxConfRow::new(tx, blockhash).into_row());
-
-    if !iconfig.light_mode {
-        rows.push(TxRow::new(tx).into_row());
-    }
-
-    let txid = full_hash(&tx.txid()[..]);
-    for (txo_index, txo) in tx.output.iter().enumerate() {
-        if is_spendable(txo) {
-            rows.push(TxOutRow::new(&txid, txo_index, txo).into_row());
-        }
-    }
-}
-
-fn sgx_add_transaction(
-    tx: &Transaction,
-    blockhash: FullHash,
-    rows: &mut Vec<DBRow>,
-    iconfig: Arc<IndexerConfig>,
 ) {
     rows.push(TxConfRow::new(tx, blockhash).into_row());
 
@@ -1536,29 +1462,23 @@ fn lookup_txos(
 }
 
 fn sgx_lookup_txos(
-    txstore: Arc<Store>,
+    txstore_db: &DB,
     outpoints: BTreeSet<OutPoint>,
     allow_missing: bool,
 ) -> HashMap<OutPoint, TxOut> {
-    let pool = threadpool::ThreadPool::new(16);
-    let final_results = Arc::new(Mutex::new(HashMap::new()));
-
-    for outpoint in outpoints {
-        let final_results = Arc::clone(&final_results);
-        let txstore = Arc::clone(&txstore);
-        pool.execute(move || {
-            if let Some(txo) = lookup_txo(&txstore.txstore_db, &outpoint) {
-                // 插入结果到最终结果中
-                let mut results = final_results.lock().unwrap();
-                results.insert(outpoint, txo);
-            } else if !allow_missing {
-                panic!("missing txo {} in {:?}", outpoint, &txstore.txstore_db);
-            }
-        });
-    }
-
-    pool.join();
-    Arc::try_unwrap(final_results).unwrap().into_inner().unwrap()
+    outpoints
+        .par_iter()
+        .filter_map(|outpoint| {
+            lookup_txo(txstore_db, outpoint)
+                .or_else(|| {
+                    if !allow_missing {
+                        panic!("missing txo {} in {:?}", outpoint, txstore_db);
+                    }
+                    None
+                })
+                .map(|txo| (*outpoint, txo))
+        })
+        .collect()
 }
 
 fn lookup_txo(txstore_db: &DB, outpoint: &OutPoint) -> Option<TxOut> {
@@ -1594,56 +1514,6 @@ fn index_blocks(
         .collect()
 }
 
-fn sgx_index_blocks(
-    block_entries: &[BlockEntry],
-    previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
-    iconfig: &IndexerConfig,
-) -> Vec<DBRow> {
-    let max_threads = 20;
-    let chunk_size = (block_entries.len() + max_threads - 1) / max_threads;
-
-    let block_chunks: Vec<_> = block_entries.chunks(chunk_size.max(1)).map(|chunk| chunk.to_vec()).collect();
-
-    let combined_rows: Arc<Mutex<Vec<DBRow>>> = Arc::new(Mutex::new(Vec::new()));
-
-    let mut handles = vec![];
-
-    for chunk in block_chunks {
-        let combined_rows = Arc::clone(&combined_rows);
-        let previous_txos_map = Arc::clone(&previous_txos_map);
-        let iconfig = iconfig.clone();
-        let handle = thread::spawn(
-            move || {
-                let mut local_rows = vec![];
-
-                for b in chunk {
-                    for (idx, tx) in b.block.txdata.iter().enumerate() {
-                        let height = b.entry.height() as u32;
-                        index_transaction(
-                            tx,
-                            height,
-                            idx as u16,
-                            &previous_txos_map,
-                            &mut local_rows,
-                            &iconfig,
-                        );
-                    }
-                    local_rows.push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row()); // mark block as "indexed"
-                }
-                let mut combined_rows = combined_rows.lock().unwrap();
-                combined_rows.extend(local_rows);
-            });
-        handles.push(handle);
-    }
-
-    for handle in handles {
-        handle.join().unwrap();
-    }
-
-    let combined_rows = Arc::try_unwrap(combined_rows).unwrap().into_inner().unwrap();
-    combined_rows
-}
-
 // TODO: return an iterator?
 fn index_transaction(
     tx: &Transaction,
@@ -1652,85 +1522,6 @@ fn index_transaction(
     previous_txos_map: &HashMap<OutPoint, TxOut>,
     rows: &mut Vec<DBRow>,
     iconfig: &IndexerConfig,
-) {
-    // persist history index:
-    //      H{funding-scripthash}{spending-height}{spending-block-pos}S{spending-txid:vin}{funding-txid:vout} → ""
-    //      H{funding-scripthash}{funding-height}{funding-block-pos}F{funding-txid:vout} → ""
-    // persist "edges" for fast is-this-TXO-spent check
-    //      S{funding-txid:vout}{spending-txid:vin} → ""
-    let txid = full_hash(&tx.txid()[..]);
-    for (txo_index, txo) in tx.output.iter().enumerate() {
-        if is_spendable(txo) || iconfig.index_unspendables {
-            let history = TxHistoryRow::new(
-                &txo.script_pubkey,
-                confirmed_height,
-                tx_position,
-                TxHistoryInfo::Funding(FundingInfo {
-                    txid,
-                    vout: txo_index as u16,
-                    value: txo.value,
-                }),
-            );
-            rows.push(history.into_row());
-
-            if iconfig.address_search {
-                if let Some(row) = addr_search_row(&txo.script_pubkey, iconfig.network) {
-                    rows.push(row);
-                }
-            }
-        }
-    }
-    for (txi_index, txi) in tx.input.iter().enumerate() {
-        if !has_prevout(txi) {
-            continue;
-        }
-        let prev_txo = previous_txos_map
-            .get(&txi.previous_output)
-            .unwrap_or_else(|| panic!("missing previous txo {}", txi.previous_output));
-
-        let history = TxHistoryRow::new(
-            &prev_txo.script_pubkey,
-            confirmed_height,
-            tx_position,
-            TxHistoryInfo::Spending(SpendingInfo {
-                txid,
-                vin: txi_index as u16,
-                prev_txid: full_hash(&txi.previous_output.txid[..]),
-                prev_vout: txi.previous_output.vout as u16,
-                value: prev_txo.value,
-            }),
-        );
-        rows.push(history.into_row());
-
-        let edge = TxEdgeRow::new(
-            full_hash(&txi.previous_output.txid[..]),
-            txi.previous_output.vout as u16,
-            txid,
-            txi_index as u16,
-        );
-        rows.push(edge.into_row());
-    }
-
-    // Index issued assets & native asset pegins/pegouts/burns
-    #[cfg(feature = "liquid")]
-    asset::index_confirmed_tx_assets(
-        tx,
-        confirmed_height,
-        tx_position,
-        iconfig.network,
-        iconfig.parent_network,
-        rows,
-    );
-}
-
-// TODO: return an iterator?
-fn sgx_index_transaction(
-    tx: &Transaction,
-    confirmed_height: u32,
-    tx_position: u16,
-    previous_txos_map: Arc<HashMap<OutPoint, TxOut>>,
-    rows: &mut Vec<DBRow>,
-    iconfig: Arc<IndexerConfig>,
 ) {
     // persist history index:
     //      H{funding-scripthash}{spending-height}{spending-block-pos}S{spending-txid:vin}{funding-txid:vout} → ""
