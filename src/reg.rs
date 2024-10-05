@@ -2,18 +2,15 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use bitcoin::{Block, BlockHash, TxMerkleNode};
+use isahc::{ReadResponseExt, RequestExt};
+use isahc::http::header::AUTHORIZATION;
 
 use crate::util::HeaderEntry;
 
-use reqwest::{blocking::Client, Url};
 use serde_json::Value;
 use crate::new_index::{BlockEntry, FetchFrom};
 #[cfg(not(feature = "liquid"))]
 use crate::chain::Network::{Fractal, FractalTestnet};
-
-lazy_static! {
-    static ref HTTP_CLIENT: Client = Client::new();
-}
 
 pub fn validate_tx_root(block: &Block, entry: &HeaderEntry) {
     let txhashroot = block.compute_merkle_root().unwrap_or_else(|| panic!("failed to compute root of txs of block {}", block.block_hash()));
@@ -66,17 +63,16 @@ pub fn unseal_data(value: Vec<u8>) -> Vec<u8> {
 }
 
 pub fn request(addr: String, auth: String, req: &Value) -> crate::errors::Result<Value> {
-    let url = Url::parse(&addr).unwrap();
-
-    let response: String = HTTP_CLIENT
-        .post(url)
+    let response = isahc::Request::post(&addr)
         .header("Content-Type", "application/json")
-        .header(reqwest::header::AUTHORIZATION, auth)
+        .header(  AUTHORIZATION, auth)
         .body(req.to_string())
+        .map_err(|e| format!("failed to provided body: {e}"))?
         .send()
         .map_err(|_|"failed to get response")?
         .text()
         .map_err(|_|"failed to get payload")?;
+
     // let response =
     // sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
     // .map_err(|e| format!("{e:?}"))?;
