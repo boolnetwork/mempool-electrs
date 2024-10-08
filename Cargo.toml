@@ -61,7 +61,7 @@ hyper = "0.14"
 hyperlocal = "0.8"
 # close to same tokio version as dependent by hyper v0.14 and hyperlocal 0.8 -- things can go awry if they mismatch
 tokio = { version = "1", features = ["sync", "macros"] }
-attohttpc = {version = "0.28.0", features = ["json"]}
+attohttpc = {version = "0.28.0", features = ["json","rustls"]}
 
 # optional dependencies for electrum-discovery
 electrum-client = { version = "0.8", optional = true }
