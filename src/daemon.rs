@@ -495,11 +495,11 @@ impl Daemon {
 
         for chunk in &chunks {
             let reqs = chunk.collect();
-            let mut replies = if self.sgx_enable {
-                self.send_req(&reqs).map_err(|e| format!("{e:?}"))?
-            } else {
-                self.call_jsonrpc(method, &reqs)?
-            };
+            // let mut replies = if self.sgx_enable {
+            //     self.send_req(&reqs).map_err(|e| format!("{e:?}"))?
+            // } else {
+            let mut replies = self.call_jsonrpc(method, &reqs)?;
+            // };
             if let Some(replies_vec) = replies.as_array_mut() {
                 for reply in replies_vec {
                     n += 1;
