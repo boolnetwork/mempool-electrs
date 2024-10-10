@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use bitcoin::{Block, BlockHash, TxMerkleNode};
-use isahc::{ReadResponseExt, RequestExt};
-use isahc::http::header::AUTHORIZATION;
 
 use crate::util::HeaderEntry;
 
@@ -62,24 +60,24 @@ pub fn unseal_data(value: Vec<u8>) -> Vec<u8> {
     sgx_bool_registration_tool::unsealing(value).unwrap()
 }
 
-pub fn request(addr: String, auth: String, req: &Value) -> crate::errors::Result<Value> {
-    let response = isahc::Request::post(&addr)
-        .header("Content-Type", "application/json")
-        .header(  AUTHORIZATION, auth)
-        .body(req.to_string())
-        .map_err(|e| format!("failed to provided body: {e}"))?
-        .send()
-        .map_err(|_|"failed to get response")?
-        .text()
-        .map_err(|_|"failed to get payload")?;
-
-    // let response =
-    // sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
-    // .map_err(|e| format!("{e:?}"))?;
-
-    let result: Value = serde_json::from_str(&response).map_err(|_| "json error".to_string())?;
-    Ok(result)
-}
+// pub fn request(addr: String, auth: String, req: &Value) -> crate::errors::Result<Value> {
+//     let response = isahc::Request::post(&addr)
+//         .header("Content-Type", "application/json")
+//         .header(  AUTHORIZATION, auth)
+//         .body(req.to_string())
+//         .map_err(|e| format!("failed to provided body: {e}"))?
+//         .send()
+//         .map_err(|_|"failed to get response")?
+//         .text()
+//         .map_err(|_|"failed to get payload")?;
+//
+//     // let response =
+//     // sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
+//     // .map_err(|e| format!("{e:?}"))?;
+//
+//     let result: Value = serde_json::from_str(&response).map_err(|_| "json error".to_string())?;
+//     Ok(result)
+// }
 
 pub fn add_blocks(
     indexer: &crate::new_index::schema::Indexer,
