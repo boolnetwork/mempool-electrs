@@ -455,7 +455,7 @@ impl Indexer {
         let mut start = Instant::now();
         let previous_txos_map = {
             let _timer = self.start_timer("index_lookup");
-            sgx_lookup_txos(&self.store.txstore_db, get_previous_txos(blocks), false)
+            sgx_lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
         };
         trace!("sgx_lookup_txos cost: {:?}", Instant::now().duration_since(start));
 
@@ -1253,9 +1253,13 @@ impl ChainQuery {
         lookup_txos(&self.store.txstore_db, outpoints, false)
     }
 
-    pub fn lookup_avail_txos(&self, outpoints: &BTreeSet<OutPoint>) -> HashMap<OutPoint, TxOut> {
+    pub fn lookup_avail_txos(&self, outpoints: &BTreeSet<OutPoint>, sgx_enable: bool) -> HashMap<OutPoint, TxOut> {
         let _timer = self.start_timer("lookup_available_txos");
-        lookup_txos(&self.store.txstore_db, outpoints, true)
+        if sgx_enable {
+            sgx_lookup_txos(&self.store.txstore_db, outpoints, true)
+        }else {
+            lookup_txos(&self.store.txstore_db, outpoints, true)
+        }
     }
 
     pub fn lookup_spend(&self, outpoint: &OutPoint) -> Option<SpendingInput> {
@@ -1463,7 +1467,7 @@ fn lookup_txos(
 
 fn sgx_lookup_txos(
     txstore_db: &DB,
-    outpoints: BTreeSet<OutPoint>,
+    outpoints: &BTreeSet<OutPoint>,
     allow_missing: bool,
 ) -> HashMap<OutPoint, TxOut> {
     outpoints

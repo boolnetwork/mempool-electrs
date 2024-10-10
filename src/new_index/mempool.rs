@@ -567,7 +567,7 @@ impl Mempool {
             .with_label_values(&["lookup_txos"])
             .start_timer();
 
-        let confirmed_txos = self.chain.lookup_avail_txos(outpoints);
+        let confirmed_txos = self.chain.lookup_avail_txos(outpoints, self.config.sgx_enable);
 
         let mempool_txos = outpoints
             .iter()
