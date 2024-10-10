@@ -466,14 +466,14 @@ impl Daemon {
         Ok(result)
     }
 
-    fn send_req(&self, req: &Value) -> Result<Value> {
-        let addr = self.conn.lock().unwrap().addr;
-        let url = format!("http://{}", addr);
-        let cookie = self.conn.lock().unwrap().cookie_getter.get()?;
-        let auth = format!("Basic {}", base64::encode(cookie));
-
-        crate::reg::request(url, auth, req)
-    }
+    // fn send_req(&self, req: &Value) -> Result<Value> {
+    //     let addr = self.conn.lock().unwrap().addr;
+    //     let url = format!("http://{}", addr);
+    //     let cookie = self.conn.lock().unwrap().cookie_getter.get()?;
+    //     let auth = format!("Basic {}", base64::encode(cookie));
+    //
+    //     crate::reg::request(url, auth, req)
+    // }
 
     fn handle_request_batch(
         &self,
