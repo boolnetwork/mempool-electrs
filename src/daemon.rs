@@ -22,19 +22,20 @@ use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
 use crate::signal::Waiter;
 use crate::util::HeaderList;
+use crate::reg::SPV_METHODS;
 
 use crate::errors::*;
 
 fn parse_hash<T>(value: &Value) -> Result<T>
-where
-    T: FromHex,
+    where
+        T: FromHex,
 {
     T::from_hex(
         value
             .as_str()
             .chain_err(|| format!("non-string value: {}", value))?,
     )
-    .chain_err(|| format!("non-hex value: {}", value))
+        .chain_err(|| format!("non-hex value: {}", value))
 }
 
 fn header_from_value(value: Value) -> Result<BlockHeader> {
@@ -314,6 +315,7 @@ pub struct Daemon {
     blocks_dir: PathBuf,
     network: Network,
     sgx_enable: bool,
+    spv_url: String,
     magic: Option<u32>,
     conn: Mutex<Connection>,
     message_id: Counter,
@@ -337,12 +339,14 @@ impl Daemon {
         magic: Option<u32>,
         signal: Waiter,
         metrics: &Metrics,
+        spv_url: String,
     ) -> Result<Daemon> {
         let daemon = Daemon {
             daemon_dir,
             blocks_dir,
             network,
             sgx_enable,
+            spv_url,
             magic,
             conn: Mutex::new(Connection::new(
                 daemon_rpc_addr,
@@ -421,6 +425,7 @@ impl Daemon {
             blocks_dir: self.blocks_dir.clone(),
             network: self.network,
             sgx_enable: self.sgx_enable,
+            spv_url: self.spv_url.clone(),
             magic: self.magic,
             conn: Mutex::new(self.conn.lock().unwrap().reconnect()?),
             message_id: Counter::new(),
@@ -466,20 +471,19 @@ impl Daemon {
         Ok(result)
     }
 
-    // fn send_req(&self, req: &Value) -> Result<Value> {
-    //     let addr = self.conn.lock().unwrap().addr;
-    //     let url = format!("http://{}", addr);
-    //     let cookie = self.conn.lock().unwrap().cookie_getter.get()?;
-    //     let auth = format!("Basic {}", base64::encode(cookie));
-    //
-    //     crate::reg::request(url, auth, req)
-    // }
+    fn send_req(&self, req: &Value) -> Result<Value> {
+        let cookie = self.conn.lock().unwrap().cookie_getter.get()?;
+        let auth = format!("Basic {}", base64::encode(cookie));
+
+        crate::reg::request(&self.spv_url, auth, req)
+    }
 
     fn handle_request_batch(
         &self,
         method: &str,
         params_list: &[Value],
         failure_threshold: f64,
+        spv: bool,
     ) -> Result<Vec<Value>> {
         let id = self.message_id.next();
         let chunks = params_list
@@ -494,11 +498,11 @@ impl Daemon {
 
         for chunk in &chunks {
             let reqs = chunk.collect();
-            // let mut replies = if self.sgx_enable {
-            //     self.send_req(&reqs).map_err(|e| format!("{e:?}"))?
-            // } else {
-            let mut replies = self.call_jsonrpc(method, &reqs)?;
-            // };
+            let mut replies = if spv {
+                self.send_req(&reqs).map_err(|e| format!("{e:?}"))?
+            } else {
+                self.call_jsonrpc(method, &reqs)?
+            };
             if let Some(replies_vec) = replies.as_array_mut() {
                 for reply in replies_vec {
                     n += 1;
@@ -533,9 +537,10 @@ impl Daemon {
         method: &str,
         params_list: &[Value],
         failure_threshold: f64,
+        spv: bool,
     ) -> Result<Vec<Value>> {
         loop {
-            match self.handle_request_batch(method, params_list, failure_threshold) {
+            match self.handle_request_batch(method, params_list, failure_threshold, spv) {
                 Err(Error(ErrorKind::Connection(msg), _)) => {
                     warn!("reconnecting to bitcoind: {}", msg);
                     self.signal.wait(Duration::from_secs(3), false)?;
@@ -549,20 +554,36 @@ impl Daemon {
     }
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
-        if self.sgx_enable {
-            debug!("request method {}", method);
-            if let Some(values) = crate::reg::filter_requests(method) {
-                return Ok(values)
+        let spv = if self.sgx_enable {
+            // debug!("request method {}", method);
+            // if let Some(values) = crate::reg::filter_requests(method) {
+            //     return Ok(values);
+            // }
+            if SPV_METHODS.contains(&method) {
+                true
+            } else {
+                false
             }
-        }
+        } else {
+            false
+        };
 
-        let mut values = self.retry_request_batch(method, &[params], 0.0)?;
+        let mut values = self.retry_request_batch(method, &[params], 0.0, spv)?;
         assert_eq!(values.len(), 1);
         Ok(values.remove(0))
     }
 
     fn requests(&self, method: &str, params_list: &[Value]) -> Result<Vec<Value>> {
-        self.retry_request_batch(method, params_list, 0.0)
+        let spv = if self.sgx_enable {
+            if SPV_METHODS.contains(&method) {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        self.retry_request_batch(method, params_list, 0.0, spv)
     }
 
     // bitcoind JSONRPC API:
@@ -690,7 +711,7 @@ impl Daemon {
             .iter()
             .map(|txhash| json!([txhash.to_hex(), /*verbose=*/ false]))
             .collect();
-        let values = self.retry_request_batch("getrawtransaction", &params_list, 0.25)?;
+        let values = self.retry_request_batch("getrawtransaction", &params_list, 0.25, false)?;
         let mut txs = vec![];
         for value in values {
             txs.push(tx_from_value(value)?);

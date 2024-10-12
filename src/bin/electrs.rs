@@ -54,6 +54,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         config.magic,
         signal.clone(),
         &metrics,
+        config.spv_url.clone(),
     )?);
     let store = Arc::new(Store::open(&config.db_path.join("newindex"), &config));
     let mut indexer = Indexer::open(

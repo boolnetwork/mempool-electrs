@@ -39,8 +39,9 @@ fn main() {
             config.magic,
             signal,
             &metrics,
+            config.spv_url,
         )
-        .unwrap(),
+            .unwrap(),
     );
 
     let chain = ChainQuery::new(Arc::clone(&store), Arc::clone(&daemon), &config, &metrics);

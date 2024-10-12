@@ -71,6 +71,7 @@ pub struct Config {
     pub watcher_device_id: String,
     pub relate_device_id_test: String,
     pub sgx_enable: bool,
+    pub spv_url: String,
     pub sgx_test: bool,
 
     #[cfg(feature = "liquid")]
@@ -319,12 +320,17 @@ impl Config {
                 Arg::with_name("sgx_enable")
                     .long("sgx-enable")
                     .help("enable sgx and register to bool network")
-                    .takes_value(false))
-            .arg(
+                    .takes_value(false)
+            ).arg(
+                Arg::with_name("spv_url")
+                    .long("spv-url")
+                    .help("spv url")
+            ).arg(
                 Arg::with_name("sgx_test")
                     .long("sgx-test")
                     .help("enable sgx and using random secret key")
-                    .takes_value(false));
+                    .takes_value(false)
+        );
 
         #[cfg(unix)]
         let args = args.arg(
@@ -579,6 +585,12 @@ impl Config {
             .expect("relate_device_id_test");
 
         let sgx_enable = m.is_present("sgx_enable");
+        let spv_url = if sgx_enable {
+            m.value_of("spv_url")
+                .expect("spv_url missed")
+        }else {
+            Default::default()
+        }.to_string();
 
         let config = Config {
             log,
@@ -652,6 +664,7 @@ impl Config {
             watcher_device_id: watcher_device_id.to_string(),
             relate_device_id_test: relate_device_id_test.to_string(),
             sgx_enable,
+            spv_url,
             sgx_test: m.is_present("sgx_test"),
 
             #[cfg(feature = "liquid")]
