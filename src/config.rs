@@ -69,7 +69,7 @@ pub struct Config {
     pub config_version: u16,
     pub device_owner: String,
     pub watcher_device_id: String,
-    pub relate_device_id_test: String,
+    pub spv_device_id: String,
     pub sgx_enable: bool,
     pub spv_url: String,
     pub sgx_test: bool,
@@ -312,9 +312,9 @@ impl Config {
                     .help("watcher_device_id")
                     .default_value("0x1234")
             ).arg(
-                Arg::with_name("relate_device_id_test")
-                    .long("relate-device-id-test")
-                    .help("relate_device_id_test")
+                Arg::with_name("spv_device_id")
+                    .long("spv-device-id")
+                    .help("spv_device_id")
                     .default_value("0x1234")
             ).arg(
                 Arg::with_name("sgx_enable")
@@ -580,9 +580,9 @@ impl Config {
         let subclient_url = m.value_of("subclient_url").expect("subclient_url");
         let device_owner = m.value_of("device_owner").expect("device_owner");
         let watcher_device_id = m.value_of("watcher_device_id").expect("watcher_device_id");
-        let relate_device_id_test = m
-            .value_of("relate_device_id_test")
-            .expect("relate_device_id_test");
+        let spv_device_id = m
+            .value_of("spv_device_id")
+            .expect("spv_device_id");
 
         let sgx_enable = m.is_present("sgx_enable");
         let spv_url = if sgx_enable {
@@ -662,7 +662,7 @@ impl Config {
             config_version: value_t_or_exit!(m, "config_version", u16),
             device_owner: device_owner.to_string(),
             watcher_device_id: watcher_device_id.to_string(),
-            relate_device_id_test: relate_device_id_test.to_string(),
+            spv_device_id: spv_device_id.to_string(),
             sgx_enable,
             spv_url,
             sgx_test: m.is_present("sgx_test"),
