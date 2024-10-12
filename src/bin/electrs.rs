@@ -187,7 +187,7 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             sgx_bool_registration_tool::register_sgx_test().await;
-            let pk = hex::decode(&config.relate_device_id_test).unwrap();
+            let pk = hex::decode(&config.spv_device_id).unwrap();
             let mut list = sgx_bool_registration_tool::RELATEDEVICEIDS
                 .read()
                 .unwrap()
