@@ -325,6 +325,7 @@ impl Config {
                 Arg::with_name("spv_url")
                     .long("spv-url")
                     .help("spv url")
+                    .default_value("")
             ).arg(
                 Arg::with_name("sgx_test")
                     .long("sgx-test")
