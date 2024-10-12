@@ -39,7 +39,7 @@ fn main() {
             config.magic,
             signal,
             &metrics,
-            config.spv_url,
+            config.spv_url.clone(),
         )
             .unwrap(),
     );
