@@ -67,21 +67,21 @@ pub fn unseal_data(value: Vec<u8>) -> Vec<u8> {
     sgx_bool_registration_tool::unsealing(value).unwrap()
 }
 
-pub fn request(addr: &str, auth: String, req: &Value) -> crate::errors::Result<Value> {
+pub fn request(addr: &str, _auth: String, req: &Value) -> crate::errors::Result<Value> {
     let url = Url::parse(addr).unwrap();
 
     let response: String = HTTP_CLIENT
         .post(url)
         .header("Content-Type", "application/json")
-        .header(AUTHORIZATION, auth)
+        //.header(AUTHORIZATION, auth)
         .body(req.to_string())
         .send()
         .expect("failed to get response")
         .text()
         .expect("failed to get payload");
     let response =
-        sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response, String::new())
-            .map_err(|e| format!("{e:?}"))?;
+        sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response.clone(), String::new())
+            .map_err(|e| format!("{e:?} {response}"))?;
 
     let result: Value = serde_json::from_str(&response).map_err(|_| "json error".to_string())?;
     Ok(result)
