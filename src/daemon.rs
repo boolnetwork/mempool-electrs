@@ -489,7 +489,7 @@ impl Daemon {
         let chunks = params_list
             .iter()
             .map(|params| json!({"method": method, "params": params, "id": id}))
-            .chunks(50_000); // Max Amount of batched requests
+            .chunks(|| -> usize { if spv {10_000} else {50_000} } () ); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
         let mut failed_requests: u64 = 0;
