@@ -6,7 +6,7 @@ use bitcoin::{Block, BlockHash, TxMerkleNode};
 use crate::util::HeaderEntry;
 
 use serde_json::Value;
-use reqwest::{Url, blocking::Client, header::AUTHORIZATION};
+use reqwest::{Url, blocking::Client};
 
 use crate::new_index::{BlockEntry, FetchFrom};
 #[cfg(not(feature = "liquid"))]
@@ -76,9 +76,9 @@ pub fn request(addr: &str, _auth: String, req: &Value) -> crate::errors::Result<
         //.header(AUTHORIZATION, auth)
         .body(req.to_string())
         .send()
-        .expect("failed to get response")
+        .map_err(|_| "failed to get response")?
         .text()
-        .expect("failed to get payload");
+        .map_err(|_| "failed to get payload")?;
     let response =
         sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response.clone(), String::new())
             .map_err(|e| format!("{e:?} {response}"))?;
