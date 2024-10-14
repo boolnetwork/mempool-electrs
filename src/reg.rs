@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use bitcoin::{Block, BlockHash, TxMerkleNode};
+use libc::mmap;
 
 use crate::util::HeaderEntry;
 
@@ -142,11 +143,15 @@ pub fn add_blocks_bitcoind(
         let block_entries: Vec<BlockEntry> = blocks
             .into_iter()
             .zip(entries)
-            .map(|(block, entry)| BlockEntry {
-                entry: entry.clone(), // TODO: remove this clone()
-                size: block.size() as u32,
-                block,
-            })
+            .map(|(block, entry)|
+                {
+                    crate::reg::validate_tx_root(&block, entry);
+                    BlockEntry {
+                        entry: entry.clone(), // TODO: remove this clone()
+                        size: block.size() as u32,
+                        block,
+                    }
+                })
             .collect();
         assert_eq!(block_entries.len(), entries.len());
 
@@ -245,10 +250,13 @@ pub fn index(
                 let block_entries: Vec<BlockEntry> = blocks
                     .into_iter()
                     .zip(entries)
-                    .map(|(block, entry)| BlockEntry {
-                        entry: entry.clone(), // TODO: remove this clone()
-                        size: block.size() as u32,
-                        block,
+                    .map(|(block, entry)| {
+                        crate::reg::validate_tx_root(&block, entry);
+                        BlockEntry {
+                            entry: entry.clone(), // TODO: remove this clone()
+                            size: block.size() as u32,
+                            block,
+                        }
                     })
                     .collect();
                 assert_eq!(block_entries.len(), entries.len());
