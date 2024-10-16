@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use bitcoin::{Block, BlockHash, TxMerkleNode};
-use libc::mmap;
 
 use crate::util::HeaderEntry;
 
@@ -123,20 +122,39 @@ pub fn add_blocks_bitcoind(
 
     for entries in new_headers.chunks(100) {
         let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
+        let mut blocks = None;
+        let mut retried = 0;
         #[cfg(not(feature = "liquid"))]
-            let blocks = match daemon.network() {
-            Fractal | FractalTestnet => daemon
-                .get_fractal_bocks(&blockhashes)
-                .expect("failed to get blocks from bitcoind"),
-            _ => daemon
-                .getblocks(&blockhashes)
-                .expect("failed to get blocks from bitcoind"),
+        while blocks.is_none() && retried < 10 {
+            match match daemon.network() {
+                Fractal | FractalTestnet => daemon
+                    .get_fractal_bocks(&blockhashes)
+                    .map_err(|_| "failed to get blocks from bitcoind"),
+                _ => daemon
+                    .getblocks(&blockhashes)
+                    .map_err(|_| "failed to get blocks from bitcoind"),
+            } {
+                Ok(data) => {
+                    blocks.replace(data);
+                },
+                Err(err) => {
+                    error!("{}", err);
+                    retried += 1
+                }
+            }
         };
 
+
         #[cfg(feature = "liquid")]
-            let blocks = daemon
+        blocks.replace(daemon
             .getblocks(&blockhashes)
-            .expect("failed to get blocks from bitcoind");
+            .expect("failed to get blocks from bitcoind"));
+
+        let blocks = if blocks.is_none() {
+            panic!("failed to get blocks from bitcoind");
+        } else {
+            blocks.unwrap()
+        };
 
         assert_eq!(blocks.len(), entries.len());
 
