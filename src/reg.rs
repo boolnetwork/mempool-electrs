@@ -69,7 +69,13 @@ pub fn unseal_data(value: Vec<u8>) -> Vec<u8> {
 
 pub fn request(addr: &str, _auth: String, req: &Value) -> crate::errors::Result<Value> {
     let url = Url::parse(addr).unwrap();
-
+    if let Some(obj) = req.as_object() {
+        if let Some(method) = obj.get("method"){
+            if method.to_string().eq("getblock") {
+                info!("{}",req)
+            }
+        }
+    }
     let response: String = HTTP_CLIENT
         .post(url)
         .header("Content-Type", "application/json")
