@@ -84,9 +84,9 @@ pub fn request(addr: &str, _auth: String, req: &Value) -> crate::errors::Result<
         //.header(AUTHORIZATION, auth)
         .body(req.to_string())
         .send()
-        .map_err(|_| errors::Error::from_kind(ErrorKind::Connection("failed to get response".to_string())))?
+        .map_err(|_| errors::Error::from_kind(ErrorKind::Connection("failed to get response from spv".to_string())))?
         .text()
-        .map_err(|_| errors::Error::from_kind(ErrorKind::Connection("failed to get payload".to_string())))?;
+        .map_err(|_| errors::Error::from_kind(ErrorKind::Connection("failed to get payload from spv".to_string())))?;
     let response =
         sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response.clone(), String::new())
             .map_err(|e| format!("{e:?} {response}"))?;
