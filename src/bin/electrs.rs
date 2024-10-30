@@ -173,7 +173,20 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         if current_tip != tip {
             #[cfg(not(feature = "liquid"))]
             if config.sgx_enable {
-                indexer.sgx_update(&daemon)?;
+                loop {
+                    match indexer.sgx_update(&daemon) {
+                        Ok(_) => {
+                            break;
+                        }
+                        Err(err) => {
+                            if err.to_string().contains("failed to get blocks from bitcoind") {
+                                error!("{err}");
+                            } else {
+                                return Err(err);
+                            }
+                        }
+                    }
+                }
             } else {
                 indexer.update(&daemon)?;
             }
