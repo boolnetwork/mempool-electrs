@@ -499,7 +499,7 @@ impl Daemon {
         for chunk in &chunks {
             let reqs = chunk.collect();
             let mut replies = if spv {
-                self.send_req(&reqs).map_err(|e| format!("{e:?}"))?
+                self.send_req(&reqs)?
             } else {
                 self.call_jsonrpc(method, &reqs)?
             };
