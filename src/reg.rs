@@ -124,8 +124,9 @@ pub fn add_blocks_bitcoind(
     for entries in new_headers.chunks(100) {
         let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
         let mut blocks = None;
+        let mut retried = 0;
         #[cfg(not(feature = "liquid"))]
-        while blocks.is_none(){
+        while blocks.is_none() && retried < 3 {
             match match daemon.network() {
                 Fractal | FractalTestnet => daemon
                     .get_fractal_bocks(&blockhashes)
@@ -139,6 +140,7 @@ pub fn add_blocks_bitcoind(
                 },
                 Err(err) => {
                     error!("{}", err);
+                    retried += 1
                 }
             }
         };
