@@ -64,15 +64,32 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         &metrics,
     );
 
+    let mut tip = None;
+
     #[cfg(not(feature = "liquid"))]
-        let mut tip = if config.sgx_enable {
-        indexer.sgx_update(&daemon)?
+    if config.sgx_enable {
+        loop {
+            match indexer.sgx_update(&daemon) {
+                Ok(block_hash) => {
+                    tip.replace(block_hash);
+                    break;
+                }
+                Err(err) => {
+                    if err.to_string().contains("failed to get blocks from bitcoind") {
+                        error!("{err}");
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+        }
     } else {
-        indexer.update(&daemon)?
+        tip.replace(indexer.update(&daemon)?);
     };
     #[cfg(feature = "liquid")]
-        let mut tip = indexer.update(&daemon)?;
+    tip.replace(indexer.update(&daemon)?);
 
+    let mut tip = tip.unwrap();
 
     let chain = Arc::new(ChainQuery::new(
         Arc::clone(&store),

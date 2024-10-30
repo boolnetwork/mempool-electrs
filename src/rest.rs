@@ -2317,4 +2317,7 @@ mod tests {
         }
         println!("remain utxos: {:?}", serde_json::to_string(&utxos).unwrap());
     }
+
+    #[test]
+    fn test_apis() {}
 }
