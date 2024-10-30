@@ -12,7 +12,7 @@ use crate::new_index::{BlockEntry, FetchFrom};
 #[cfg(not(feature = "liquid"))]
 use crate::chain::Network::{Fractal, FractalTestnet};
 use crate::errors;
-use crate::errors::ErrorKind;
+use crate::errors::{Error, ErrorKind};
 
 lazy_static! {
     static ref HTTP_CLIENT: Client = Client::new();
@@ -137,7 +137,7 @@ pub fn add_blocks_bitcoind(
             } {
                 Ok(data) => {
                     blocks.replace(data);
-                },
+                }
                 Err(err) => {
                     error!("{}", err);
                     retried += 1
@@ -152,7 +152,7 @@ pub fn add_blocks_bitcoind(
             .expect("failed to get blocks from bitcoind"));
 
         let blocks = if blocks.is_none() {
-            panic!("failed to get blocks from bitcoind");
+            return Err(Error::from("failed to get blocks from bitcoind"));
         } else {
             blocks.unwrap()
         };
@@ -164,7 +164,7 @@ pub fn add_blocks_bitcoind(
             .zip(entries)
             .map(|(block, entry)|
                 {
-                    crate::reg::validate_tx_root(&block, entry);
+                    validate_tx_root(&block, entry);
                     BlockEntry {
                         entry: entry.clone(), // TODO: remove this clone()
                         size: block.size() as u32,
