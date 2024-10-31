@@ -697,8 +697,8 @@ impl Config {
     }
 }
 
-struct StaticCookie {
-    value: Vec<u8>,
+pub struct StaticCookie {
+    pub value: Vec<u8>,
 }
 
 impl CookieGetter for StaticCookie {

@@ -458,7 +458,7 @@ impl Daemon {
         let mut conn = self.conn.lock().unwrap();
         let timer = self.latency.with_label_values(&[method]).start_timer();
         if let Some(obj) = request.as_object() {
-            if let Some(method) = obj.get("method"){
+            if let Some(method) = obj.get("method") {
                 if method.to_string().eq("getblock") {
                     debug!("{}",request)
                 }
@@ -497,7 +497,7 @@ impl Daemon {
         let chunks = params_list
             .iter()
             .map(|params| json!({"method": method, "params": params, "id": id}))
-            .chunks(|| -> usize { if spv {10_000} else {50_000} } () ); // Max Amount of batched requests
+            .chunks(|| -> usize { if spv { 10_000 } else { 50_000 } }()); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
         let mut failed_requests: u64 = 0;
@@ -876,5 +876,104 @@ impl Daemon {
 
         // from BTC/kB to sat/b
         Ok(relayfee * 100_000f64)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::env::var;
+    use std::net::ToSocketAddrs;
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use bitcoin::{Address, BlockHash, Network};
+    use crate::config::StaticCookie;
+    use crate::daemon::{block_from_value, Connection, parse_jsonrpc_reply};
+    use crate::signal::Waiter;
+    use bitcoin::hashes::hex::{FromHex, ToHex};
+    use reqwest::blocking::Client;
+    use serde_json::{from_str, Value};
+
+    fn new_conn() -> Connection {
+        let bitcoind_url = var("BITCOIND").unwrap();
+        let cookie = var("BTC_COOKIE").unwrap();
+        let signal = Waiter::start();
+        let conn = Connection::new(
+            bitcoind_url
+                .to_socket_addrs()
+                .unwrap_or_else(|_| panic!("unable to resolve {} address", "Bitcoin RPC"))
+                .collect::<Vec<_>>()
+                .pop()
+                .unwrap(),
+            Arc::new(
+                StaticCookie {
+                    value: cookie.as_bytes().to_vec()
+                }
+            ),
+            signal,
+            false,
+        ).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_get_address_balance() {
+        let mut conn = new_conn();
+        let block_hash = BlockHash::from_str("000000000c31272b94df9abb43f11f9758f18c4084d2799b60f162c68db88360").unwrap();
+        let req = json!({"method": "getblock", "params": json!([block_hash.to_hex(), 0]), "id": 1}).to_string();
+        conn.send(&req).unwrap();
+        let response = conn.recv().unwrap();
+        let mut response_value: Value = from_str(&response).unwrap();
+
+        let value = match parse_jsonrpc_reply(response_value.take(), "method", 1) {
+            Ok(block) => block,
+            Err(err) => {
+                panic!(err)
+            }
+        };
+
+        let block = block_from_value(value).unwrap();
+
+        let mut address_list = vec![];
+        enum AddressType {
+            Normal,
+            PubKey,
+        }
+
+        'outer: for tx in block.txdata.iter() {
+            for out in tx.output.iter() {
+                if let Some(addr) = Address::from_script(&out.script_pubkey, Network::Testnet) {
+                    address_list.push((AddressType::Normal, addr.to_string()))
+                } else {
+                    address_list.push((AddressType::PubKey, out.script_pubkey.to_hex()))
+                }
+                if address_list.len() >= 10000 {
+                    break 'outer;
+                }
+            }
+        };
+        let electrs_url = var("ELECTRS").unwrap();
+        address_list.into_iter().for_each(|address| {
+            let url = match address.0 {
+                AddressType::Normal => {
+                    format!("{}/address/{}", electrs_url, address.1)
+                }
+                AddressType::PubKey => {
+                    format!("{}/scripthash/{}", electrs_url, address.1)
+                }
+            };
+
+            let client = Client::new();
+            let response = client
+                .get(url)
+                .send()
+                .unwrap()
+                .text()
+                .unwrap();
+            println!("{response}");
+            // std::thread::sleep(Duration::from_millis(500));
+        });
+
+        println!("{response}")
     }
 }
