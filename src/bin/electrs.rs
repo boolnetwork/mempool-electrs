@@ -169,14 +169,15 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         }
 
         // Index new blocks
-        let current_tip = daemon.getbestblockhash()?;
-        if current_tip != tip {
-            #[cfg(not(feature = "liquid"))]
-            if config.sgx_enable {
-                loop {
+        let mut ok = false;
+        loop {
+            let current_tip = daemon.getbestblockhash()?;
+            if current_tip != tip {
+                #[cfg(not(feature = "liquid"))]
+                if config.sgx_enable {
                     match indexer.sgx_update(&daemon) {
                         Ok(_) => {
-                            break;
+                            ok = true;
                         }
                         Err(err) => {
                             if err.to_string().contains("failed to get blocks from bitcoind") {
@@ -186,15 +187,27 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                             }
                         }
                     }
+                } else {
+                    indexer.update(&daemon)?;
+                    ok = true;
                 }
-            } else {
-                indexer.update(&daemon)?;
-            }
-            #[cfg(feature = "liquid")]
-            indexer.update(&daemon)?;
 
-            tip = current_tip;
-        };
+                #[cfg(feature = "liquid")]
+                match indexer.update(&daemon) {
+                    Ok(_) => {
+                        ok = true;
+                    }
+                    Err(err) => {
+                        return Err(err);
+                    }
+                };
+
+                if ok {
+                    tip = current_tip;
+                    break;
+                }
+            }
+        }
 
         // Update mempool
         if let Err(e) = Mempool::update(&mempool, &daemon) {

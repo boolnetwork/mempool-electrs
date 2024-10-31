@@ -2093,6 +2093,9 @@ mod tests {
     use crate::util::TransactionStatus;
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::net::TcpStream;
+    use std::str::FromStr;
+    use bitcoin::BlockHash;
 
     #[test]
     fn test_parse_query_param() {
@@ -2317,7 +2320,4 @@ mod tests {
         }
         println!("remain utxos: {:?}", serde_json::to_string(&utxos).unwrap());
     }
-
-    #[test]
-    fn test_apis() {}
 }
