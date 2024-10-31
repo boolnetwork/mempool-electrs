@@ -182,7 +182,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                         }
                         Err(err) => {
                             if err.to_string().contains("failed to get blocks from bitcoind") {
-                                error!("{err}");
+                                warn!("{err}");
                             } else {
                                 return Err(err);
                             }
