@@ -130,10 +130,10 @@ pub fn add_blocks_bitcoind(
             match match daemon.network() {
                 Fractal | FractalTestnet => daemon
                     .get_fractal_bocks(&blockhashes)
-                    .map_err(|_| "failed to get blocks from bitcoind"),
+                    .map_err(|_| format!("failed to get blocks from bitcoind {:?}", blockhashes)),
                 _ => daemon
                     .getblocks(&blockhashes)
-                    .map_err(|_| "failed to get blocks from bitcoind"),
+                    .map_err(|_| format!("failed to get blocks from bitcoind {:?}", blockhashes)),
             } {
                 Ok(data) => {
                     blocks.replace(data);
@@ -152,7 +152,7 @@ pub fn add_blocks_bitcoind(
             .expect("failed to get blocks from bitcoind"));
 
         let blocks = if blocks.is_none() {
-            return Err(Error::from("failed to get blocks from bitcoind"));
+            return Err(Error::from(format!("failed to get blocks from bitcoind {:?}", blockhashes)));
         } else {
             blocks.unwrap()
         };
