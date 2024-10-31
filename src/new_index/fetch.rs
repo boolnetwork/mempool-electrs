@@ -384,10 +384,10 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
 mod test {
     use crate::new_index::fetch::parse_blocks_fractal;
     use bitcoin::consensus::{deserialize, Decodable};
-    use bitcoin::{Block, BlockHeader};
+    use bitcoin::{BlockHeader};
     use byteorder::{BigEndian, ReadBytesExt};
     use std::fs;
-    use std::io::{self, Cursor, Read};
+    use std::io::{self, Cursor};
 
     fn parse_blocks_magic(blob: Vec<u8>, expected_magic: u32) -> io::Result<()> {
         let mut cursor = Cursor::new(blob);
