@@ -885,12 +885,11 @@ mod test {
     use std::net::ToSocketAddrs;
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
-    use bitcoin::{Address, BlockHash, Network};
+    use bitcoin::{Address, BlockHash, Network, ScriptHash};
     use crate::config::StaticCookie;
     use crate::daemon::{block_from_value, Connection, parse_jsonrpc_reply};
     use crate::signal::Waiter;
-    use bitcoin::hashes::hex::{FromHex, ToHex};
+    use bitcoin::hashes::hex::ToHex;
     use reqwest::blocking::Client;
     use serde_json::{from_str, Value};
 
@@ -928,7 +927,7 @@ mod test {
         let value = match parse_jsonrpc_reply(response_value.take(), "method", 1) {
             Ok(block) => block,
             Err(err) => {
-                panic!(err)
+                panic!("{}", err)
             }
         };
 
@@ -945,7 +944,9 @@ mod test {
                 if let Some(addr) = Address::from_script(&out.script_pubkey, Network::Testnet) {
                     address_list.push((AddressType::Normal, addr.to_string()))
                 } else {
-                    address_list.push((AddressType::PubKey, out.script_pubkey.to_hex()))
+                    if let Ok(script_hash) = ScriptHash::from_str(&out.script_pubkey.to_hex()){
+                        address_list.push((AddressType::PubKey, script_hash.to_string()))
+                    }
                 }
                 if address_list.len() >= 10000 {
                     break 'outer;

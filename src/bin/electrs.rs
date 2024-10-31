@@ -171,6 +171,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         // Index new blocks
         let mut ok = false;
         loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
             let current_tip = daemon.getbestblockhash()?;
             if current_tip != tip {
                 #[cfg(not(feature = "liquid"))]
