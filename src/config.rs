@@ -368,6 +368,8 @@ impl Config {
             Network::Testnet4 => 48332,
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 58332,
+            #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => 58333,
 
             #[cfg(feature = "liquid")]
             Network::Liquid => 7041,
@@ -385,6 +387,8 @@ impl Config {
             Network::Fractal => 40002,
             #[cfg(not(feature = "liquid"))]
             Network::TBC => 40003,
+            #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => 40003,
             #[cfg(not(feature = "liquid"))]
             Network::Regtest => 60401,
             #[cfg(not(feature = "liquid"))]
@@ -413,6 +417,8 @@ impl Config {
             #[cfg(not(feature = "liquid"))]
             Network::Fractal => 3005,
             #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => 3006,
+            #[cfg(not(feature = "liquid"))]
             Network::TBC => 3006,
             #[cfg(not(feature = "liquid"))]
             Network::TBCRegtest => 3007,
@@ -439,6 +445,8 @@ impl Config {
             Network::TBC => 46224,
             #[cfg(not(feature = "liquid"))]
             Network::TBCRegtest => 54225,
+            #[cfg(not(feature = "liquid"))]
+            Network::FractalTestnet => 45225,
             #[cfg(not(feature = "liquid"))]
             Network::Signet => 54224,
 
@@ -484,7 +492,7 @@ impl Config {
             });
         match network_type {
             #[cfg(not(feature = "liquid"))]
-            Network::Bitcoin => (),
+            Network::Bitcoin | Network::Fractal | Network::FractalTestnet=> (),
             #[cfg(not(feature = "liquid"))]
             Network::Testnet => daemon_dir.push("testnet3"),
             #[cfg(not(feature = "liquid"))]
