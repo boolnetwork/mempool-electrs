@@ -5,22 +5,29 @@ use bitcoin::{Block, BlockHash, TxMerkleNode};
 
 use crate::util::HeaderEntry;
 
+use crate::chain::Network;
+use reqwest::{blocking::Client, Url};
 use serde_json::Value;
-use reqwest::{Url, blocking::Client};
 
-use crate::new_index::{BlockEntry, FetchFrom};
 #[cfg(not(feature = "liquid"))]
-use crate::chain::Network::{Fractal, FractalTestnet, Dogecoin, DogecoinTestnet, DogecoinRegtest};
+use crate::chain::Network::{Dogecoin, DogecoinRegtest, DogecoinTestnet, Fractal, FractalTestnet};
 use crate::errors;
 use crate::errors::{Error, ErrorKind};
+use crate::new_index::{BlockEntry, FetchFrom};
 
 lazy_static! {
     static ref HTTP_CLIENT: Client = Client::new();
-    pub static ref SPV_METHODS: Vec<&'static str> = vec!["getbestblockhash", "getblockheader", "getblockhash"];
+    pub static ref SPV_METHODS: Vec<&'static str> =
+        vec!["getbestblockhash", "getblockheader", "getblockhash"];
 }
 
 pub fn validate_tx_root(block: &Block, entry: &HeaderEntry) {
-    let txhashroot = block.compute_merkle_root().unwrap_or_else(|| panic!("failed to compute root of txs of block {}", block.block_hash()));
+    let txhashroot = block.compute_merkle_root().unwrap_or_else(|| {
+        panic!(
+            "failed to compute root of txs of block {}",
+            block.block_hash()
+        )
+    });
 
     let sgx_txhashroot = TxMerkleNode::from_hash(entry.header().merkle_root.as_hash());
 
@@ -77,12 +84,22 @@ pub fn request(addr: &str, _auth: String, req: &Value) -> crate::errors::Result<
         //.header(AUTHORIZATION, auth)
         .body(req.to_string())
         .send()
-        .map_err(|_| errors::Error::from_kind(ErrorKind::Connection("failed to get response from spv".to_string())))?
+        .map_err(|_| {
+            errors::Error::from_kind(ErrorKind::Connection(
+                "failed to get response from spv".to_string(),
+            ))
+        })?
         .text()
-        .map_err(|_| errors::Error::from_kind(ErrorKind::Connection("failed to get payload from spv".to_string())))?;
-    let response =
-        sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(response.clone(), String::new())
-            .map_err(|e| format!("{e:?} {response}"))?;
+        .map_err(|_| {
+            errors::Error::from_kind(ErrorKind::Connection(
+                "failed to get payload from spv".to_string(),
+            ))
+        })?;
+    let response = sgx_bool_registration_tool::verify_sgx_response_and_restore_origin_response_v2(
+        response.clone(),
+        String::new(),
+    )
+    .map_err(|e| format!("{e:?} {response}"))?;
 
     let result: Value = serde_json::from_str(&response).map_err(|_| "json error".to_string())?;
     Ok(result)
@@ -94,20 +111,8 @@ pub fn add_blocks(
     new_headers: Vec<HeaderEntry>,
 ) -> crate::errors::Result<()> {
     match indexer.fetch_from() {
-        FetchFrom::Bitcoind => {
-            add_blocks_bitcoind(
-                indexer,
-                daemon,
-                new_headers,
-            )
-        }
-        FetchFrom::BlkFiles => {
-            add_blocks_blkfiles(
-                indexer,
-                daemon,
-                new_headers,
-            )
-        }
+        FetchFrom::Bitcoind => add_blocks_bitcoind(indexer, daemon, new_headers),
+        FetchFrom::BlkFiles => add_blocks_blkfiles(indexer, daemon, new_headers),
     }
 }
 
@@ -143,18 +148,22 @@ pub fn add_blocks_bitcoind(
                     retried += 1
                 }
             }
-        };
-
+        }
 
         #[cfg(feature = "liquid")]
-        blocks.replace(daemon
-            .getblocks(&blockhashes)
-            .expect("failed to get blocks from bitcoind"));
+        blocks.replace(
+            daemon
+                .getblocks(&blockhashes)
+                .expect("failed to get blocks from bitcoind"),
+        );
 
-        let blocks = if blocks.is_none() {
-            return Err(Error::from(format!("failed to get blocks from bitcoind {:?}", blockhashes)));
+        let blocks = if let Some(blocks) = blocks {
+            blocks
         } else {
-            blocks.unwrap()
+            return Err(Error::from(format!(
+                "failed to get blocks from bitcoind {:?}",
+                blockhashes
+            )));
         };
 
         assert_eq!(blocks.len(), entries.len());
@@ -162,21 +171,24 @@ pub fn add_blocks_bitcoind(
         let block_entries: Vec<BlockEntry> = blocks
             .into_iter()
             .zip(entries)
-            .map(|(block, entry)|
-                {
-                    validate_tx_root(&block, entry);
-                    BlockEntry {
-                        entry: entry.clone(), // TODO: remove this clone()
-                        size: block.size() as u32,
-                        block,
-                    }
-                })
+            .map(|(block, entry)| {
+                validate_tx_root(&block, entry);
+                BlockEntry {
+                    entry: entry.clone(), // TODO: remove this clone()
+                    size: block.size() as u32,
+                    block,
+                }
+            })
             .collect();
         assert_eq!(block_entries.len(), entries.len());
 
         let start = Instant::now();
         indexer.sgx_add(&block_entries);
-        debug!("sgx_add {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
+        debug!(
+            "sgx_add {} blocks cost: {:?}",
+            block_entries.len(),
+            Instant::now().duration_since(start)
+        );
     }
 
     Ok(())
@@ -200,8 +212,19 @@ pub fn add_blocks_blkfiles(
             std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
 
         trace!("parsing {} bytes", blob.len());
-        let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
-            .expect("failed to parse blk*.dat file");
+        let blocks = match daemon.network() {
+            Network::Bitcoin
+            | Network::Testnet
+            | Network::Testnet4
+            | Fractal
+            | FractalTestnet
+            | Network::Regtest
+            | Network::Signet => crate::new_index::fetch::sgx_parse_blocks(blob, magic),
+            Dogecoin | DogecoinTestnet | DogecoinRegtest => {
+                crate::new_index::fetch::sgx_parse_aux_blocks(blob, magic)
+            }
+        }
+        .expect("failed to parse blk*.dat file");
 
         let block_entries: Vec<crate::new_index::BlockEntry> = blocks
             .into_iter()
@@ -221,7 +244,11 @@ pub fn add_blocks_blkfiles(
             .collect();
         let start = Instant::now();
         indexer.sgx_add(&block_entries);
-        debug!("sgx_add {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
+        debug!(
+            "sgx_add {} blocks cost: {:?}",
+            block_entries.len(),
+            Instant::now().duration_since(start)
+        );
     }
 
     if !entry_map.is_empty() {
@@ -250,17 +277,19 @@ pub fn index(
             for entries in new_headers.chunks(100) {
                 let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
                 #[cfg(not(feature = "liquid"))]
-                    let blocks = match daemon.network() {
-                    Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => daemon
-                        .get_blocks_has_aux(&blockhashes)
-                        .expect("failed to get blocks from bitcoind"),
+                let blocks = match daemon.network() {
+                    Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => {
+                        daemon
+                            .get_blocks_has_aux(&blockhashes)
+                            .expect("failed to get blocks from bitcoind")
+                    }
                     _ => daemon
                         .getblocks(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                 };
 
                 #[cfg(feature = "liquid")]
-                    let blocks = daemon
+                let blocks = daemon
                     .getblocks(&blockhashes)
                     .expect("failed to get blocks from bitcoind");
 
@@ -282,7 +311,11 @@ pub fn index(
 
                 let start = Instant::now();
                 indexer.sgx_index(&block_entries);
-                debug!("sgx_add {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
+                debug!(
+                    "sgx_add {} blocks cost: {:?}",
+                    block_entries.len(),
+                    Instant::now().duration_since(start)
+                );
             }
         }
         FetchFrom::BlkFiles => {
@@ -294,8 +327,8 @@ pub fn index(
 
             for path in blk_files {
                 trace!("reading {:?}", path);
-                let blob =
-                    std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
+                let blob = std::fs::read(&path)
+                    .unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
 
                 trace!("parsing {} bytes", blob.len());
                 let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
@@ -320,7 +353,11 @@ pub fn index(
 
                 let start = Instant::now();
                 indexer.sgx_index(&block_entries);
-                debug!("index {} blocks cost: {:?}", block_entries.len(),Instant::now().duration_since(start));
+                debug!(
+                    "index {} blocks cost: {:?}",
+                    block_entries.len(),
+                    Instant::now().duration_since(start)
+                );
             }
 
             if !entry_map.is_empty() {

@@ -2,8 +2,11 @@ use crate::chain::{BlockHash, BlockHeader};
 use crate::errors::*;
 use crate::new_index::BlockEntry;
 
+use bitcoin::consensus::Decodable;
+use bitcoin::{Block, Transaction, VarInt};
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Cursor;
 use std::iter::FromIterator;
 use std::slice;
 use time::format_description::well_known::Rfc3339;
@@ -321,4 +324,43 @@ impl BlockMeta {
                 .chain_err(|| "weight not a number")? as u32,
         })
     }
+}
+
+pub fn parse_aux_block(block_bytes: Vec<u8>) -> Result<Block> {
+    let mut cursor = Cursor::new(block_bytes);
+    let header = BlockHeader::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+    const VERSION_FLAG_AUXPOW: i32 = 1 << 8;
+    if header.version & VERSION_FLAG_AUXPOW != 0 {
+        let _parent_coinbase_tx =
+            Transaction::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+        let _parent_blockhash =
+            BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+        let _coinbase_merkle_branch_len =
+            VarInt::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+        for _ in 0.._coinbase_merkle_branch_len.0 {
+            let _coinbase_merkle_branch_hash =
+                BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+        }
+        let _coinbase_merkle_branch_size_mask =
+            i32::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+        let _blockchain_merkle_branch_len =
+            VarInt::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+        for _ in 0.._blockchain_merkle_branch_len.0 {
+            let _blockchain_merkle_branch_hash =
+                BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+        }
+        let _blockchain_merkle_branch_size_mask =
+            i32::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+        let _parent_block_header =
+            BlockHeader::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+    }
+
+    let txdata =
+        Vec::<Transaction>::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+    Ok(Block { header, txdata })
 }

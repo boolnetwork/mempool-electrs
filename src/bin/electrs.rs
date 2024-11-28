@@ -75,7 +75,10 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                     break;
                 }
                 Err(err) => {
-                    if err.to_string().contains("failed to get blocks from bitcoind") {
+                    if err
+                        .to_string()
+                        .contains("failed to get blocks from bitcoind")
+                    {
                         error!("{err}");
                     } else {
                         return Err(err);
@@ -117,7 +120,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     }
 
     #[cfg(feature = "liquid")]
-        let asset_db = config.asset_db_path.as_ref().map(|db_dir| {
+    let asset_db = config.asset_db_path.as_ref().map(|db_dir| {
         let asset_db = Arc::new(RwLock::new(AssetRegistry::new(db_dir.clone())));
         AssetRegistry::spawn_sync(asset_db.clone());
         asset_db
@@ -129,7 +132,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         Arc::clone(&daemon),
         Arc::clone(&config),
         #[cfg(feature = "liquid")]
-            asset_db,
+        asset_db,
     ));
 
     // TODO: configuration for which servers to start
@@ -181,7 +184,10 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                             ok = true;
                         }
                         Err(err) => {
-                            if err.to_string().contains("failed to get blocks from bitcoind") {
+                            if err
+                                .to_string()
+                                .contains("failed to get blocks from bitcoind")
+                            {
                                 warn!("{err}");
                             } else {
                                 return Err(err);
@@ -252,7 +258,7 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
                     config.watcher_device_id.clone(),
                     2u16,
                 )
-                    .await;
+                .await;
                 std::thread::park();
             });
         });

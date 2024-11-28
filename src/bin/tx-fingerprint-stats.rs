@@ -41,7 +41,7 @@ fn main() {
             &metrics,
             config.spv_url.clone(),
         )
-            .unwrap(),
+        .unwrap(),
     );
 
     let chain = ChainQuery::new(Arc::clone(&store), Arc::clone(&daemon), &config, &metrics);

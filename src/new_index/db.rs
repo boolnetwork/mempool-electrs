@@ -174,7 +174,9 @@ impl DB {
     pub fn put_sync(&self, key: &[u8], value: &[u8]) {
         let mut opts = rocksdb::WriteOptions::new();
         opts.set_sync(true);
-        self.db.put_opt(key, seal_data(value.to_vec()), &opts).unwrap();
+        self.db
+            .put_opt(key, seal_data(value.to_vec()), &opts)
+            .unwrap();
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Bytes> {
@@ -195,7 +197,7 @@ impl DB {
         match self.get(b"V") {
             None => self.put(b"V", &compatibility_bytes),
             Some(ref x) if x != &compatibility_bytes => {
-                println!("x={:?} compatibility_bytes={:?}",x,compatibility_bytes);
+                println!("x={:?} compatibility_bytes={:?}", x, compatibility_bytes);
                 panic!("Incompatible database found. Please reindex.")
             }
             Some(_) => (),

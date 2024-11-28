@@ -561,7 +561,9 @@ impl Config {
             #[cfg(not(feature = "liquid"))]
             Network::Bitcoin | Network::Fractal | Network::Dogecoin => (),
             #[cfg(not(feature = "liquid"))]
-            Network::Testnet | Network::FractalTestnet | Network::DogecoinTestnet => daemon_dir.push("testnet3"),
+            Network::Testnet | Network::FractalTestnet | Network::DogecoinTestnet => {
+                daemon_dir.push("testnet3")
+            }
             #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => daemon_dir.push("testnet4"),
             #[cfg(not(feature = "liquid"))]
@@ -605,17 +607,15 @@ impl Config {
         let subclient_url = m.value_of("subclient_url").expect("subclient_url");
         let device_owner = m.value_of("device_owner").expect("device_owner");
         let watcher_device_id = m.value_of("watcher_device_id").expect("watcher_device_id");
-        let spv_device_id = m
-            .value_of("spv_device_id")
-            .expect("spv_device_id");
+        let spv_device_id = m.value_of("spv_device_id").expect("spv_device_id");
 
         let sgx_enable = m.is_present("sgx_enable");
         let spv_url = if sgx_enable {
-            m.value_of("spv_url")
-                .expect("spv_url missed")
-        }else {
+            m.value_of("spv_url").expect("spv_url missed")
+        } else {
             Default::default()
-        }.to_string();
+        }
+        .to_string();
 
         if !spv_url.is_empty() {
             match network_type {
@@ -625,13 +625,10 @@ impl Config {
                 | Network::Regtest
                 | Network::Signet
                 | Network::Fractal
-                | Network::FractalTestnet
-                => {
+                | Network::FractalTestnet => {
                     assert!(spv_url.ends_with("btc"));
                 }
-                Network::Dogecoin
-                | Network::DogecoinTestnet
-                | Network::DogecoinRegtest => {
+                Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => {
                     assert!(spv_url.ends_with("doge"));
                 }
             }

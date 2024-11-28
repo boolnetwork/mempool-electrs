@@ -166,10 +166,12 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
             genesis_block(BNetwork::Testnet).block_hash();
         static ref TESTNET4_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
             "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043"
-        ).unwrap();
+        )
+        .unwrap();
         static ref FRACTAL_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
             "00000000000000005a5c13fe33f6717c7ad81fc8837ae75e4693c16acbdd0f66"
-        ).unwrap();
+        )
+        .unwrap();
         static ref FRACTAL_TESTNET_GENESIS: bitcoin::BlockHash =
             genesis_block(BNetwork::Bitcoin).block_hash();
         static ref REGTEST_GENESIS: bitcoin::BlockHash =
@@ -178,13 +180,16 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
             genesis_block(BNetwork::Signet).block_hash();
         static ref DOGECOIN_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
             "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691"
-        ).unwrap();
+        )
+        .unwrap();
         static ref DOGECOINTESTNET_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
             "bb0a78264637406b6360aad926284d544d7049f45189db5664f3c4d07350559e"
-        ).unwrap();
+        )
+        .unwrap();
         static ref DOGECOINREGTEST_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
             "3d2160a3b5dc4a9d62e7e66a295f70313ac808440ef7400d6c0772171ce973a5"
-        ).unwrap();
+        )
+        .unwrap();
     }
     #[cfg(not(feature = "liquid"))]
     match network {
@@ -270,7 +275,7 @@ impl From<Network> for BNetwork {
             Network::Testnet4 => BNetwork::Testnet,
             Network::Regtest => BNetwork::Regtest,
             Network::Signet => BNetwork::Signet,
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }

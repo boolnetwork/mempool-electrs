@@ -336,7 +336,10 @@ impl Indexer {
 
         let start = Instant::now();
         crate::reg::add_blocks(self, &daemon, to_add)?;
-        debug!("add_blocks cost :{:?}", Instant::now().duration_since(start));
+        debug!(
+            "add_blocks cost :{:?}",
+            Instant::now().duration_since(start)
+        );
 
         self.start_auto_compactions(&self.store.txstore_db);
 
@@ -407,7 +410,7 @@ impl Indexer {
         let rows = {
             let _timer = self.start_timer("add_process");
             // sgx_add_blocks(Arc::new(blocks.to_vec()), Arc::new(self.iconfig.clone()))
-            add_blocks(blocks,&self.iconfig)
+            add_blocks(blocks, &self.iconfig)
         };
         {
             let _timer = self.start_timer("add_write");
@@ -457,7 +460,10 @@ impl Indexer {
             let _timer = self.start_timer("index_lookup");
             sgx_lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
         };
-        trace!("sgx_lookup_txos cost: {:?}", Instant::now().duration_since(start));
+        trace!(
+            "sgx_lookup_txos cost: {:?}",
+            Instant::now().duration_since(start)
+        );
 
         let rows = {
             let _timer = self.start_timer("index_process");
@@ -473,11 +479,17 @@ impl Indexer {
                     panic!("cannot index block {} (missing from store)", blockhash);
                 }
             }
-            trace!("check added_blockhashes cost: {:?}", Instant::now().duration_since(start));
+            trace!(
+                "check added_blockhashes cost: {:?}",
+                Instant::now().duration_since(start)
+            );
 
             start = Instant::now();
             let rows = index_blocks(blocks, &previous_txos_map, &self.iconfig);
-            trace!("index_blocks cost: {:?}", Instant::now().duration_since(start));
+            trace!(
+                "index_blocks cost: {:?}",
+                Instant::now().duration_since(start)
+            );
             rows
         };
         self.store.history_db.write(rows, self.flush);
@@ -1253,11 +1265,15 @@ impl ChainQuery {
         lookup_txos(&self.store.txstore_db, outpoints, false)
     }
 
-    pub fn lookup_avail_txos(&self, outpoints: &BTreeSet<OutPoint>, sgx_enable: bool) -> HashMap<OutPoint, TxOut> {
+    pub fn lookup_avail_txos(
+        &self,
+        outpoints: &BTreeSet<OutPoint>,
+        sgx_enable: bool,
+    ) -> HashMap<OutPoint, TxOut> {
         let _timer = self.start_timer("lookup_available_txos");
         if sgx_enable {
             sgx_lookup_txos(&self.store.txstore_db, outpoints, true)
-        }else {
+        } else {
             lookup_txos(&self.store.txstore_db, outpoints, true)
         }
     }
@@ -2276,14 +2292,13 @@ fn test_iter_and_pariter() {
     let a: Vec<_> = (0..100_000_000).collect();
 
     let start = Instant::now();
-    a.par_iter().map(|x| {
-        x * 2
-    }).for_each(drop);
-    println!("par_iter duration: {:?}", Instant::now().duration_since(start));
+    a.par_iter().map(|x| x * 2).for_each(drop);
+    println!(
+        "par_iter duration: {:?}",
+        Instant::now().duration_since(start)
+    );
 
     let start = Instant::now();
-    a.iter().map(|x| {
-        x * 2
-    }).for_each(drop);
+    a.iter().map(|x| x * 2).for_each(drop);
     println!("iter duration: {:?}", Instant::now().duration_since(start));
 }

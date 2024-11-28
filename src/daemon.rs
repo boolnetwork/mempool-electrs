@@ -1,12 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Cursor, Lines, Write};
+use std::io::{BufRead, BufReader, Lines, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64;
-use bitcoin::consensus::Decodable;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use glob;
 use hex;
@@ -14,30 +13,29 @@ use itertools::Itertools;
 use serde_json::{from_str, from_value, Value};
 
 #[cfg(not(feature = "liquid"))]
-use bitcoin::consensus::encode::{deserialize, serialize};
-use bitcoin::VarInt;
-#[cfg(feature = "liquid")]
-use elements::encode::{deserialize, serialize};
-#[cfg(not(feature = "liquid"))]
-use crate::chain::Network::{Fractal, FractalTestnet, Dogecoin, DogecoinRegtest, DogecoinTestnet};
+use crate::chain::Network::{Dogecoin, DogecoinRegtest, DogecoinTestnet, Fractal, FractalTestnet};
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
-use crate::signal::Waiter;
-use crate::util::HeaderList;
 use crate::reg::SPV_METHODS;
+use crate::signal::Waiter;
+use crate::util::{parse_aux_block, HeaderList};
+#[cfg(not(feature = "liquid"))]
+use bitcoin::consensus::encode::{deserialize, serialize};
+#[cfg(feature = "liquid")]
+use elements::encode::{deserialize, serialize};
 
 use crate::errors::*;
 
 fn parse_hash<T>(value: &Value) -> Result<T>
-    where
-        T: FromHex,
+where
+    T: FromHex,
 {
     T::from_hex(
         value
             .as_str()
             .chain_err(|| format!("non-string value: {}", value))?,
     )
-        .chain_err(|| format!("non-hex value: {}", value))
+    .chain_err(|| format!("non-hex value: {}", value))
 }
 
 fn header_from_value(value: Value) -> Result<BlockHeader> {
@@ -69,42 +67,7 @@ fn block_from_value(value: Value) -> Result<Block> {
 fn aux_block_from_value(value: Value) -> Result<Block> {
     let block_hex = value.as_str().chain_err(|| "non-string block")?;
     let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
-    let mut cursor = Cursor::new(block_bytes);
-    let header = BlockHeader::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-    const VERSION_FLAG_AUXPOW: i32 = 1 << 8;
-    if header.version & VERSION_FLAG_AUXPOW != 0 {
-        let _parent_coinbase_tx =
-            Transaction::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-
-        let _parent_blockhash =
-            BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-
-        let _coinbase_merkle_branch_len =
-            VarInt::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-        for _ in 0.._coinbase_merkle_branch_len.0 {
-            let _coinbase_merkle_branch_hash =
-                BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-        }
-        let _coinbase_merkle_branch_size_mask =
-            i32::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-
-        let _blockchain_merkle_branch_len =
-            VarInt::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-        for _ in 0.._blockchain_merkle_branch_len.0 {
-            let _blockchain_merkle_branch_hash =
-                BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-        }
-        let _blockchain_merkle_branch_size_mask =
-            i32::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-
-        let _parent_block_header =
-            BlockHeader::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-    }
-
-    let txdata =
-        Vec::<Transaction>::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
-
-    Ok(Block { header, txdata })
+    parse_aux_block(block_bytes)
 }
 
 // fn fractal_block_from_value(block_hex: Value) -> Result<Block> {
@@ -503,7 +466,7 @@ impl Daemon {
         if let Some(obj) = request.as_object() {
             if let Some(method) = obj.get("method") {
                 if method.to_string().eq("getblock") {
-                    debug!("{}",request)
+                    debug!("{}", request)
                 }
             }
         }
@@ -540,7 +503,13 @@ impl Daemon {
         let chunks = params_list
             .iter()
             .map(|params| json!({"method": method, "params": params, "id": id}))
-            .chunks(|| -> usize { if spv { 10_000 } else { 50_000 } }()); // Max Amount of batched requests
+            .chunks((|| {
+                if spv {
+                    10_000
+                } else {
+                    50_000
+                }
+            })()); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
         let mut failed_requests: u64 = 0;
@@ -606,15 +575,7 @@ impl Daemon {
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
         let spv = if self.sgx_enable {
-            // debug!("request method {}", method);
-            // if let Some(values) = crate::reg::filter_requests(method) {
-            //     return Ok(values);
-            // }
-            if SPV_METHODS.contains(&method) {
-                true
-            } else {
-                false
-            }
+            SPV_METHODS.contains(&method)
         } else {
             false
         };
@@ -626,11 +587,7 @@ impl Daemon {
 
     fn requests(&self, method: &str, params_list: &[Value]) -> Result<Vec<Value>> {
         let spv = if self.sgx_enable {
-            if SPV_METHODS.contains(&method) {
-                true
-            } else {
-                false
-            }
+            SPV_METHODS.contains(&method)
         } else {
             false
         };
@@ -647,16 +604,8 @@ impl Daemon {
     fn getmempoolinfo(&self) -> Result<MempoolInfo> {
         let info: Value = self.request("getmempoolinfo", json!([]))?;
         match self.network {
-            Dogecoin | DogecoinTestnet |DogecoinRegtest => {
-                Ok(
-                    MempoolInfo {
-                        loaded: true,
-                    }
-                )
-            }
-            _ => {
-                from_value(info).chain_err(|| "invalid mempool info")
-            }
+            Dogecoin | DogecoinTestnet | DogecoinRegtest => Ok(MempoolInfo { loaded: true }),
+            _ => from_value(info).chain_err(|| "invalid mempool info"),
         }
     }
 
@@ -701,7 +650,7 @@ impl Daemon {
         for h in self.requests("getblockheader", &params_list)? {
             #[cfg(not(feature = "liquid"))]
             match self.network {
-                Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest=> {
+                Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => {
                     result.push(header_from_value_aux(h)?);
                 }
                 _ => {
@@ -735,12 +684,16 @@ impl Daemon {
         let values = self.requests("getblock", &params_list)?;
         let mut blocks = vec![];
         match self.network {
-            Network::Bitcoin | Network::Testnet | Network::Testnet4 | Network::Regtest | Network::Signet=> {
+            Network::Bitcoin
+            | Network::Testnet
+            | Network::Testnet4
+            | Network::Regtest
+            | Network::Signet => {
                 for value in values {
                     blocks.push(block_from_value(value)?);
                 }
             }
-            _ => unreachable!()
+            _ => unreachable!(),
         }
 
         Ok(blocks)
@@ -927,17 +880,17 @@ impl Daemon {
 
 #[cfg(test)]
 mod test {
+    use crate::config::StaticCookie;
+    use crate::daemon::{block_from_value, parse_jsonrpc_reply, Connection};
+    use crate::signal::Waiter;
+    use bitcoin::hashes::hex::ToHex;
+    use bitcoin::{Address, BlockHash, Network, ScriptHash};
+    use reqwest::blocking::Client;
+    use serde_json::{from_str, Value};
     use std::env::var;
     use std::net::ToSocketAddrs;
     use std::str::FromStr;
     use std::sync::Arc;
-    use bitcoin::{Address, BlockHash, Network, ScriptHash};
-    use crate::config::StaticCookie;
-    use crate::daemon::{block_from_value, Connection, parse_jsonrpc_reply};
-    use crate::signal::Waiter;
-    use bitcoin::hashes::hex::ToHex;
-    use reqwest::blocking::Client;
-    use serde_json::{from_str, Value};
 
     fn new_conn() -> Connection {
         let bitcoind_url = var("BITCOIND").unwrap();
@@ -950,22 +903,24 @@ mod test {
                 .collect::<Vec<_>>()
                 .pop()
                 .unwrap(),
-            Arc::new(
-                StaticCookie {
-                    value: cookie.as_bytes().to_vec()
-                }
-            ),
+            Arc::new(StaticCookie {
+                value: cookie.as_bytes().to_vec(),
+            }),
             signal,
             false,
-        ).unwrap();
+        )
+        .unwrap();
         conn
     }
 
     #[test]
     fn test_get_address_balance() {
         let mut conn = new_conn();
-        let block_hash = BlockHash::from_str("000000000c31272b94df9abb43f11f9758f18c4084d2799b60f162c68db88360").unwrap();
-        let req = json!({"method": "getblock", "params": json!([block_hash.to_hex(), 0]), "id": 1}).to_string();
+        let block_hash =
+            BlockHash::from_str("000000000c31272b94df9abb43f11f9758f18c4084d2799b60f162c68db88360")
+                .unwrap();
+        let req = json!({"method": "getblock", "params": json!([block_hash.to_hex(), 0]), "id": 1})
+            .to_string();
         conn.send(&req).unwrap();
         let response = conn.recv().unwrap();
         let mut response_value: Value = from_str(&response).unwrap();
@@ -990,7 +945,7 @@ mod test {
                 if let Some(addr) = Address::from_script(&out.script_pubkey, Network::Testnet) {
                     address_list.push((AddressType::Normal, addr.to_string()))
                 } else {
-                    if let Ok(script_hash) = ScriptHash::from_str(&out.script_pubkey.to_hex()){
+                    if let Ok(script_hash) = ScriptHash::from_str(&out.script_pubkey.to_hex()) {
                         address_list.push((AddressType::PubKey, script_hash.to_string()))
                     }
                 }
@@ -998,7 +953,7 @@ mod test {
                     break 'outer;
                 }
             }
-        };
+        }
         let electrs_url = var("ELECTRS").unwrap();
         address_list.into_iter().for_each(|address| {
             let url = match address.0 {
@@ -1011,12 +966,7 @@ mod test {
             };
 
             let client = Client::new();
-            let response = client
-                .get(url)
-                .send()
-                .unwrap()
-                .text()
-                .unwrap();
+            let response = client.get(url).send().unwrap().text().unwrap();
             println!("{response}");
             // std::thread::sleep(Duration::from_millis(500));
         });
