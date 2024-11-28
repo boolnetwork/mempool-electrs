@@ -84,8 +84,8 @@ fn bitcoind_fetcher(
                 let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
                 #[cfg(not(feature = "liquid"))]
                     let blocks = match daemon.network() {
-                    Fractal | FractalTestnet => daemon
-                        .get_bocks_has_aux(&blockhashes)
+                    Fractal | FractalTestnet | Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => daemon
+                        .get_blocks_has_aux(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                     _ => daemon
                         .getblocks(&blockhashes)

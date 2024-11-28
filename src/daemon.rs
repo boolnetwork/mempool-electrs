@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader, Lines, Write};
+use std::io::{BufRead, BufReader, Cursor, Lines, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64;
+use bitcoin::consensus::Decodable;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use glob;
 use hex;
@@ -14,6 +15,7 @@ use serde_json::{from_str, from_value, Value};
 
 #[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, serialize};
+use bitcoin::VarInt;
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
 #[cfg(not(feature = "liquid"))]
@@ -46,7 +48,7 @@ fn header_from_value(value: Value) -> Result<BlockHeader> {
     deserialize(&header_bytes).chain_err(|| format!("failed to parse header {}", header_hex))
 }
 
-fn header_from_value_80(value: Value) -> Result<BlockHeader> {
+fn header_from_value_aux(value: Value) -> Result<BlockHeader> {
     let header_hex = value
         .as_str()
         .chain_err(|| format!("non-string header: {}", value))?;
@@ -62,6 +64,47 @@ fn block_from_value(value: Value) -> Result<Block> {
     let block_hex = value.as_str().chain_err(|| "non-string block")?;
     let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
     deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
+}
+
+fn aux_block_from_value(value: Value) -> Result<Block> {
+    let block_hex = value.as_str().chain_err(|| "non-string block")?;
+    let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
+    let mut cursor = Cursor::new(block_bytes);
+    let header = BlockHeader::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+    const VERSION_FLAG_AUXPOW: i32 = 1 << 8;
+    if header.version & VERSION_FLAG_AUXPOW != 0 {
+        let _parent_coinbase_tx =
+            Transaction::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+        let _parent_blockhash =
+            BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+        let _coinbase_merkle_branch_len =
+            VarInt::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+        for _ in 0.._coinbase_merkle_branch_len.0 {
+            let _coinbase_merkle_branch_hash =
+                BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+        }
+        let _coinbase_merkle_branch_size_mask =
+            i32::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+        let _blockchain_merkle_branch_len =
+            VarInt::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+        for _ in 0.._blockchain_merkle_branch_len.0 {
+            let _blockchain_merkle_branch_hash =
+                BlockHash::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+        }
+        let _blockchain_merkle_branch_size_mask =
+            i32::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+        let _parent_block_header =
+            BlockHeader::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+    }
+
+    let txdata =
+        Vec::<Transaction>::consensus_decode(&mut cursor).map_err(|err| err.to_string())?;
+
+    Ok(Block { header, txdata })
 }
 
 // fn fractal_block_from_value(block_hex: Value) -> Result<Block> {
@@ -629,7 +672,7 @@ impl Daemon {
     pub fn getblockheader(&self, blockhash: &BlockHash) -> Result<BlockHeader> {
         #[cfg(not(feature = "liquid"))]
         if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
-            header_from_value_80(self.request(
+            header_from_value_aux(self.request(
                 "getblockheader",
                 json!([blockhash.to_hex(), /*verbose=*/ false]),
             )?)
@@ -659,7 +702,7 @@ impl Daemon {
             #[cfg(not(feature = "liquid"))]
             match self.network {
                 Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest=> {
-                    result.push(header_from_value_80(h)?);
+                    result.push(header_from_value_aux(h)?);
                 }
                 _ => {
                     result.push(header_from_value(h)?);
@@ -691,40 +734,28 @@ impl Daemon {
             .collect();
         let values = self.requests("getblock", &params_list)?;
         let mut blocks = vec![];
-        for value in values {
-            blocks.push(block_from_value(value)?);
+        match self.network {
+            Network::Bitcoin | Network::Testnet | Network::Testnet4 | Network::Regtest | Network::Signet=> {
+                for value in values {
+                    blocks.push(block_from_value(value)?);
+                }
+            }
+            _ => unreachable!()
         }
+
         Ok(blocks)
     }
 
-    pub fn get_bocks_has_aux(&self, blockhashes: &[BlockHash]) -> Result<Vec<Block>> {
+    pub fn get_blocks_has_aux(&self, blockhashes: &[BlockHash]) -> Result<Vec<Block>> {
         let params_list: Vec<Value> = blockhashes
             .iter()
             .map(|hash| json!([hash.to_hex(), /*verbose=*/ false]))
             .collect();
 
-        let mut block_values = self.requests("getblock", &params_list)?;
-        let block_header_values = self.requests("getblockheader", &params_list)?;
-        assert_eq!(block_values.len(), block_header_values.len());
-        for (idx, block_header_value) in block_header_values.iter().enumerate() {
-            let header_hex = block_header_value
-                .as_str()
-                .chain_err(|| "non-string block header")?;
-            let header_len = 80 * 2;
-            if header_hex.len() > header_len {
-                let remaining_header_data = &header_hex[header_len..];
-                if let Some(block_value) = block_values.get_mut(idx) {
-                    let block_hex = block_value.as_str().chain_err(|| "non-string block")?;
-                    assert_eq!(block_hex[..header_len], header_hex[..header_len]);
-                    let updated_block_hex = block_hex.replace(remaining_header_data, "");
-                    *block_value = Value::String(updated_block_hex);
-                }
-            }
-        }
-
+        let block_values = self.requests("getblock", &params_list)?;
         let mut blocks = vec![];
         for value in block_values {
-            blocks.push(block_from_value(value)?);
+            blocks.push(aux_block_from_value(value)?);
         }
         Ok(blocks)
     }

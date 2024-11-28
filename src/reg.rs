@@ -129,7 +129,7 @@ pub fn add_blocks_bitcoind(
         while blocks.is_none() && retried < 3 {
             match match daemon.network() {
                 Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => daemon
-                    .get_bocks_has_aux(&blockhashes)
+                    .get_blocks_has_aux(&blockhashes)
                     .map_err(|_| format!("failed to get blocks from bitcoind {:?}", blockhashes)),
                 _ => daemon
                     .getblocks(&blockhashes)
@@ -251,8 +251,8 @@ pub fn index(
                 let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
                 #[cfg(not(feature = "liquid"))]
                     let blocks = match daemon.network() {
-                    Fractal | FractalTestnet => daemon
-                        .get_bocks_has_aux(&blockhashes)
+                    Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => daemon
+                        .get_blocks_has_aux(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                     _ => daemon
                         .getblocks(&blockhashes)
