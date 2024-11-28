@@ -425,6 +425,12 @@ impl Config {
             Network::Fractal => 58332,
             #[cfg(not(feature = "liquid"))]
             Network::FractalTestnet => 58333,
+            #[cfg(not(feature = "liquid"))]
+            Network::Dogecoin => 22555,
+            #[cfg(not(feature = "liquid"))]
+            Network::DogecoinTestnet => 44555,
+            #[cfg(not(feature = "liquid"))]
+            Network::DogecoinRegtest => 18332,
 
             #[cfg(feature = "liquid")]
             Network::Liquid => 7041,
@@ -446,6 +452,12 @@ impl Config {
             Network::Regtest => 60401,
             #[cfg(not(feature = "liquid"))]
             Network::Signet => 60601,
+            #[cfg(not(feature = "liquid"))]
+            Network::Dogecoin => 40004,
+            #[cfg(not(feature = "liquid"))]
+            Network::DogecoinTestnet => 40005,
+            #[cfg(not(feature = "liquid"))]
+            Network::DogecoinRegtest => 40006,
 
             #[cfg(feature = "liquid")]
             Network::Liquid => 51000,
@@ -469,6 +481,12 @@ impl Config {
             Network::Fractal => 3005,
             #[cfg(not(feature = "liquid"))]
             Network::FractalTestnet => 3006,
+            #[cfg(not(feature = "liquid"))]
+            Network::Dogecoin => 3007,
+            #[cfg(not(feature = "liquid"))]
+            Network::DogecoinTestnet => 3008,
+            #[cfg(not(feature = "liquid"))]
+            Network::DogecoinRegtest => 3009,
 
             #[cfg(feature = "liquid")]
             Network::Liquid => 3000,
@@ -492,6 +510,12 @@ impl Config {
             Network::FractalTestnet => 45225,
             #[cfg(not(feature = "liquid"))]
             Network::Signet => 54224,
+            #[cfg(not(feature = "liquid"))]
+            Network::Dogecoin => 45226,
+            #[cfg(not(feature = "liquid"))]
+            Network::DogecoinTestnet => 45227,
+            #[cfg(not(feature = "liquid"))]
+            Network::DogecoinRegtest => 45228,
 
             #[cfg(feature = "liquid")]
             Network::Liquid => 34224,
@@ -535,13 +559,13 @@ impl Config {
             });
         match network_type {
             #[cfg(not(feature = "liquid"))]
-            Network::Bitcoin | Network::Fractal | Network::FractalTestnet => (),
+            Network::Bitcoin | Network::Fractal | Network::Dogecoin => (),
             #[cfg(not(feature = "liquid"))]
-            Network::Testnet => daemon_dir.push("testnet3"),
+            Network::Testnet | Network::FractalTestnet | Network::DogecoinTestnet => daemon_dir.push("testnet3"),
             #[cfg(not(feature = "liquid"))]
             Network::Testnet4 => daemon_dir.push("testnet4"),
             #[cfg(not(feature = "liquid"))]
-            Network::Regtest => daemon_dir.push("regtest"),
+            Network::Regtest | Network::DogecoinRegtest => daemon_dir.push("regtest"),
             #[cfg(not(feature = "liquid"))]
             Network::Signet => daemon_dir.push("signet"),
 

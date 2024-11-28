@@ -10,7 +10,7 @@ use reqwest::{Url, blocking::Client};
 
 use crate::new_index::{BlockEntry, FetchFrom};
 #[cfg(not(feature = "liquid"))]
-use crate::chain::Network::{Fractal, FractalTestnet};
+use crate::chain::Network::{Fractal, FractalTestnet, Dogecoin, DogecoinTestnet, DogecoinRegtest};
 use crate::errors;
 use crate::errors::{Error, ErrorKind};
 
@@ -128,8 +128,8 @@ pub fn add_blocks_bitcoind(
         #[cfg(not(feature = "liquid"))]
         while blocks.is_none() && retried < 3 {
             match match daemon.network() {
-                Fractal | FractalTestnet => daemon
-                    .get_fractal_bocks(&blockhashes)
+                Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => daemon
+                    .get_bocks_has_aux(&blockhashes)
                     .map_err(|_| format!("failed to get blocks from bitcoind {:?}", blockhashes)),
                 _ => daemon
                     .getblocks(&blockhashes)
@@ -252,7 +252,7 @@ pub fn index(
                 #[cfg(not(feature = "liquid"))]
                     let blocks = match daemon.network() {
                     Fractal | FractalTestnet => daemon
-                        .get_fractal_bocks(&blockhashes)
+                        .get_bocks_has_aux(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                     _ => daemon
                         .getblocks(&blockhashes)

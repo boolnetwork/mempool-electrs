@@ -43,6 +43,12 @@ pub enum Network {
     Regtest,
     #[cfg(not(feature = "liquid"))]
     Signet,
+    #[cfg(not(feature = "liquid"))]
+    Dogecoin,
+    #[cfg(not(feature = "liquid"))]
+    DogecoinTestnet,
+    #[cfg(not(feature = "liquid"))]
+    DogecoinRegtest,
 
     #[cfg(feature = "liquid")]
     Liquid,
@@ -69,6 +75,9 @@ impl Network {
             Network::Testnet4 => 0x283F161C,
             Network::Fractal => 0xD99E94B9,
             Network::FractalTestnet => 0xE8ADA3C8,
+            Network::Dogecoin => 0xC0C0C0C0,
+            Network::DogecoinTestnet => 0xDCB7C1FC,
+            Network::DogecoinRegtest => 0xDAB5BFFA,
             _ => BNetwork::from(self).magic(),
         }
     }
@@ -84,7 +93,7 @@ impl Network {
     pub fn is_regtest(self) -> bool {
         match self {
             #[cfg(not(feature = "liquid"))]
-            Network::Regtest => true,
+            Network::Regtest | Network::DogecoinRegtest => true,
             #[cfg(feature = "liquid")]
             Network::LiquidRegtest => true,
             _ => false,
@@ -125,8 +134,12 @@ impl Network {
             "testnet".to_string(),
             "testnet4".to_string(),
             "fractal".to_string(),
+            "fractal_testnet".to_string(),
             "regtest".to_string(),
             "signet".to_string(),
+            "dogecoin".to_string(),
+            "dogecoin_testnet".to_string(),
+            "dogecoin_regtest".to_string(),
         ];
 
         #[cfg(feature = "liquid")]
@@ -153,18 +166,25 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
             genesis_block(BNetwork::Testnet).block_hash();
         static ref TESTNET4_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
             "00000000da84f2bafbbc53dee25a72ae507ff4914b867c565be350b0da8bf043"
-        )
-        .unwrap();
+        ).unwrap();
         static ref FRACTAL_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
             "00000000000000005a5c13fe33f6717c7ad81fc8837ae75e4693c16acbdd0f66"
-        )
-        .unwrap();
+        ).unwrap();
         static ref FRACTAL_TESTNET_GENESIS: bitcoin::BlockHash =
             genesis_block(BNetwork::Bitcoin).block_hash();
         static ref REGTEST_GENESIS: bitcoin::BlockHash =
             genesis_block(BNetwork::Regtest).block_hash();
         static ref SIGNET_GENESIS: bitcoin::BlockHash =
             genesis_block(BNetwork::Signet).block_hash();
+        static ref DOGECOIN_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
+            "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691"
+        ).unwrap();
+        static ref DOGECOINTESTNET_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
+            "bb0a78264637406b6360aad926284d544d7049f45189db5664f3c4d07350559e"
+        ).unwrap();
+        static ref DOGECOINREGTEST_GENESIS: bitcoin::BlockHash = bitcoin::BlockHash::from_str(
+            "3d2160a3b5dc4a9d62e7e66a295f70313ac808440ef7400d6c0772171ce973a5"
+        ).unwrap();
     }
     #[cfg(not(feature = "liquid"))]
     match network {
@@ -175,6 +195,9 @@ pub fn bitcoin_genesis_hash(network: Network) -> bitcoin::BlockHash {
         Network::Fractal => *FRACTAL_GENESIS,
         Network::Regtest => *REGTEST_GENESIS,
         Network::Signet => *SIGNET_GENESIS,
+        Network::Dogecoin => *DOGECOIN_GENESIS,
+        Network::DogecoinTestnet => *DOGECOINTESTNET_GENESIS,
+        Network::DogecoinRegtest => *DOGECOINREGTEST_GENESIS,
     }
     #[cfg(feature = "liquid")]
     match network {
@@ -219,6 +242,12 @@ impl From<&str> for Network {
             "regtest" => Network::Regtest,
             #[cfg(not(feature = "liquid"))]
             "signet" => Network::Signet,
+            #[cfg(not(feature = "liquid"))]
+            "dogecoin" => Network::Dogecoin,
+            #[cfg(not(feature = "liquid"))]
+            "dogecoin_testnet" => Network::DogecoinTestnet,
+            #[cfg(not(feature = "liquid"))]
+            "dogecoin_regtest" => Network::DogecoinRegtest,
 
             #[cfg(feature = "liquid")]
             "liquid" => Network::Liquid,
@@ -239,10 +268,9 @@ impl From<Network> for BNetwork {
             Network::Bitcoin => BNetwork::Bitcoin,
             Network::Testnet => BNetwork::Testnet,
             Network::Testnet4 => BNetwork::Testnet,
-            Network::Fractal => BNetwork::Bitcoin,
-            Network::FractalTestnet => BNetwork::Bitcoin,
             Network::Regtest => BNetwork::Regtest,
             Network::Signet => BNetwork::Signet,
+            _ => unreachable!()
         }
     }
 }

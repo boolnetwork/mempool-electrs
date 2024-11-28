@@ -17,7 +17,7 @@ use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
 #[cfg(not(feature = "liquid"))]
-use crate::chain::Network::{Fractal, FractalTestnet};
+use crate::chain::Network::{Fractal, FractalTestnet, Dogecoin, DogecoinRegtest, DogecoinTestnet};
 use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
 use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
 use crate::signal::Waiter;
@@ -46,7 +46,7 @@ fn header_from_value(value: Value) -> Result<BlockHeader> {
     deserialize(&header_bytes).chain_err(|| format!("failed to parse header {}", header_hex))
 }
 
-fn header_from_value_fractal(value: Value) -> Result<BlockHeader> {
+fn header_from_value_80(value: Value) -> Result<BlockHeader> {
     let header_hex = value
         .as_str()
         .chain_err(|| format!("non-string header: {}", value))?;
@@ -603,7 +603,18 @@ impl Daemon {
 
     fn getmempoolinfo(&self) -> Result<MempoolInfo> {
         let info: Value = self.request("getmempoolinfo", json!([]))?;
-        from_value(info).chain_err(|| "invalid mempool info")
+        match self.network {
+            Dogecoin | DogecoinTestnet |DogecoinRegtest => {
+                Ok(
+                    MempoolInfo {
+                        loaded: true,
+                    }
+                )
+            }
+            _ => {
+                from_value(info).chain_err(|| "invalid mempool info")
+            }
+        }
     }
 
     fn getnetworkinfo(&self) -> Result<NetworkInfo> {
@@ -618,7 +629,7 @@ impl Daemon {
     pub fn getblockheader(&self, blockhash: &BlockHash) -> Result<BlockHeader> {
         #[cfg(not(feature = "liquid"))]
         if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
-            header_from_value_fractal(self.request(
+            header_from_value_80(self.request(
                 "getblockheader",
                 json!([blockhash.to_hex(), /*verbose=*/ false]),
             )?)
@@ -646,11 +657,15 @@ impl Daemon {
         let mut result = vec![];
         for h in self.requests("getblockheader", &params_list)? {
             #[cfg(not(feature = "liquid"))]
-            if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
-                result.push(header_from_value_fractal(h)?);
-            } else {
-                result.push(header_from_value(h)?);
+            match self.network {
+                Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest=> {
+                    result.push(header_from_value_80(h)?);
+                }
+                _ => {
+                    result.push(header_from_value(h)?);
+                }
             }
+
             #[cfg(feature = "liquid")]
             result.push(header_from_value(h)?);
         }
@@ -682,7 +697,7 @@ impl Daemon {
         Ok(blocks)
     }
 
-    pub fn get_fractal_bocks(&self, blockhashes: &[BlockHash]) -> Result<Vec<Block>> {
+    pub fn get_bocks_has_aux(&self, blockhashes: &[BlockHash]) -> Result<Vec<Block>> {
         let params_list: Vec<Value> = blockhashes
             .iter()
             .map(|hash| json!([hash.to_hex(), /*verbose=*/ false]))
@@ -709,7 +724,7 @@ impl Daemon {
 
         let mut blocks = vec![];
         for value in block_values {
-            blocks.push(fractal_block_from_value(value)?);
+            blocks.push(block_from_value(value)?);
         }
         Ok(blocks)
     }

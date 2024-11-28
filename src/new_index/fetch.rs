@@ -85,7 +85,7 @@ fn bitcoind_fetcher(
                 #[cfg(not(feature = "liquid"))]
                     let blocks = match daemon.network() {
                     Fractal | FractalTestnet => daemon
-                        .get_fractal_bocks(&blockhashes)
+                        .get_bocks_has_aux(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                     _ => daemon
                         .getblocks(&blockhashes)
