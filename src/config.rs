@@ -634,7 +634,6 @@ impl Config {
                 | Network::DogecoinRegtest => {
                     assert!(spv_url.ends_with("doge"));
                 }
-                _ => unreachable!()
             }
         }
 

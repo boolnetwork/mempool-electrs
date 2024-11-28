@@ -64,11 +64,11 @@ fn block_from_value(value: Value) -> Result<Block> {
     deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
 }
 
-fn fractal_block_from_value(block_hex: Value) -> Result<Block> {
-    let block_hex = block_hex.as_str().chain_err(|| "non-string block")?;
-    let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
-    deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
-}
+// fn fractal_block_from_value(block_hex: Value) -> Result<Block> {
+//     let block_hex = block_hex.as_str().chain_err(|| "non-string block")?;
+//     let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
+//     deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
+// }
 
 fn tx_from_value(value: Value) -> Result<Transaction> {
     let tx_hex = value.as_str().chain_err(|| "non-string tx")?;

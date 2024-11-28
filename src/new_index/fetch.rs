@@ -11,7 +11,7 @@ use std::thread;
 use std::fs;
 #[cfg(not(feature = "liquid"))]
 use crate::chain::Network::{Fractal, FractalTestnet};
-use crate::chain::{Block, BlockHash};
+use crate::chain::{Block, BlockHash, Network};
 use crate::daemon::Daemon;
 use crate::errors::*;
 use crate::util::{spawn_thread, HeaderEntry, SyncChannel};
@@ -130,11 +130,15 @@ fn blkfiles_fetcher(
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
     #[cfg(not(feature = "liquid"))]
-        let parser = if daemon.network().eq(&Fractal) || daemon.network().eq(&FractalTestnet) {
-        blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
-    } else {
-        blkfiles_parser(blkfiles_reader(blk_files), magic)
+    let parser = match daemon.network() {
+        Network::Bitcoin | Network::Testnet | Network::Testnet4 | Network::Regtest | Network::Signet=> {
+            blkfiles_parser(blkfiles_reader(blk_files), magic)
+        }
+        Fractal | FractalTestnet | Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => {
+            blkfiles_parser_has_aux(blkfiles_reader(blk_files), magic)
+        }
     };
+
     #[cfg(feature = "liquid")]
         let parser = blkfiles_parser(blkfiles_reader(blk_files), magic);
 
@@ -207,7 +211,7 @@ fn blkfiles_parser(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<SizedBloc
     )
 }
 
-fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<SizedBlock>> {
+fn blkfiles_parser_has_aux(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<SizedBlock>> {
     let chan = SyncChannel::new(1);
     let sender = chan.sender();
 
@@ -217,7 +221,7 @@ fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<S
             blobs.map(|blob| {
                 trace!("parsing {} bytes", blob.len());
                 let blocks =
-                    parse_blocks_fractal(blob, magic).expect("failed to parse blk*.dat file");
+                    parse_blocks_has_aux(blob, magic).expect("failed to parse blk*.dat file");
                 sender
                     .send(blocks)
                     .expect("failed to send blocks from blk*.dat file");
@@ -321,7 +325,7 @@ pub(crate) fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>>
     }))
 }
 
-fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
+fn parse_blocks_has_aux(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     let mut cursor = Cursor::new(&blob);
     let mut slices = vec![];
     let max_pos = blob.len() as u64;
@@ -382,7 +386,7 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
 
 #[cfg(test)]
 mod test {
-    use crate::new_index::fetch::parse_blocks_fractal;
+    use crate::new_index::fetch::parse_blocks_has_aux;
     use bitcoin::consensus::{deserialize, Decodable};
     use bitcoin::{BlockHeader};
     use byteorder::{BigEndian, ReadBytesExt};
@@ -415,7 +419,7 @@ mod test {
             fs::read("../fractald-release/fractald-docker/data/blocks/blk00000.dat").unwrap();
         println!("blob len: {}", blob.len());
         // parse_blocks_magic(blob, 0xE8ADA3C8).unwrap();
-        let result = parse_blocks_fractal(blob, 0xe8ada3c8).unwrap();
+        let result = parse_blocks_has_aux(blob, 0xe8ada3c8).unwrap();
         println!("{:?}", result);
     }
 
