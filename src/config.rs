@@ -617,6 +617,27 @@ impl Config {
             Default::default()
         }.to_string();
 
+        if !spv_url.is_empty() {
+            match network_type {
+                Network::Bitcoin
+                | Network::Testnet
+                | Network::Testnet4
+                | Network::Regtest
+                | Network::Signet
+                | Network::Fractal
+                | Network::FractalTestnet
+                => {
+                    assert!(spv_url.ends_with("btc"));
+                }
+                Network::Dogecoin
+                | Network::DogecoinTestnet
+                | Network::DogecoinRegtest => {
+                    assert!(spv_url.ends_with("doge"));
+                }
+                _ => unreachable!()
+            }
+        }
+
         let config = Config {
             log,
             network_type,
