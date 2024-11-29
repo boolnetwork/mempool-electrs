@@ -413,27 +413,18 @@ fn parse_blocks_has_aux(blob: Vec<u8>, magic: u32, network: Network) -> Result<V
         }
 
         let block_size = u32::consensus_decode(&mut cursor).chain_err(|| "no block size")?;
-        let (ranges, start, end) = match network {
+        let (range, start, end) = match network {
             Fractal | FractalTestnet => {
-                let auxpow_size =
+                let _auxpow_size =
                     u32::consensus_decode(&mut cursor).chain_err(|| "no auxpow size")?;
                 let start = cursor.position();
-                let header_end = start + 80;
-                let ntx_start = header_end + auxpow_size as u64;
                 let end = start + block_size as u64;
-                (
-                    vec![
-                        start as usize..header_end as usize,
-                        ntx_start as usize..end as usize,
-                    ],
-                    start,
-                    end,
-                )
+                (start as usize..end as usize, start, end)
             }
             Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => {
                 let start = cursor.position();
                 let end = start + block_size as u64;
-                (vec![start as usize..end as usize], start, end)
+                (start as usize..end as usize, start, end)
             }
             _ => unreachable!(),
         };
@@ -453,9 +444,9 @@ fn parse_blocks_has_aux(blob: Vec<u8>, magic: u32, network: Network) -> Result<V
         }
 
         let mut block_data = vec![];
-        for range in ranges {
-            block_data.extend_from_slice(&blob[range])
-        }
+        // for range in ranges {
+            block_data.extend_from_slice(&blob[range]);
+        // }
         slices.push((block_data, block_size));
         cursor.set_position(end);
     }
@@ -470,7 +461,7 @@ fn parse_blocks_has_aux(blob: Vec<u8>, magic: u32, network: Network) -> Result<V
         Fractal | FractalTestnet => Ok(pool.install(|| {
             slices
                 .into_par_iter()
-                .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
+                .map(|(slice, size)| (parse_aux_block(slice).expect("failed to parse Block"), size))
                 .collect()
         })),
         Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => Ok(pool
@@ -518,11 +509,14 @@ mod test {
 
     #[test]
     fn test_parse_blk() {
-        let blob = fs::read("../../test_data/blk00004.dat").unwrap();
-        println!("blob len: {}", blob.len());
-        // parse_blocks_magic(blob, 0xE8ADA3C8).unwrap();
-        let result = parse_blocks_has_aux(blob, 0xDCB7C1FC, Network::DogecoinTestnet).unwrap();
-        println!("{:?}", result.len());
+        let doge_testnet_blob = fs::read("test_data/doge_testnet.dat").unwrap();
+        assert!(parse_blocks_has_aux(doge_testnet_blob, 0xDCB7C1FC, Network::DogecoinTestnet).is_ok());
+        let doge_main_blob = fs::read("test_data/dogecoin.dat").unwrap();
+        assert!(parse_blocks_has_aux(doge_main_blob, 0xC0C0C0C0, Network::Dogecoin).is_ok());
+        let fractal_testnet_blob = fs::read("test_data/fractal_testnet.dat").unwrap();
+        assert!(parse_blocks_has_aux(fractal_testnet_blob, 0xE8ADA3C8, Network::FractalTestnet).is_ok());
+        let fractal_main_blob = fs::read("test_data/fractal.dat").unwrap();
+        assert!(parse_blocks_has_aux(fractal_main_blob, 0xD99E94B9, Network::Fractal).is_ok());
     }
 
     #[test]
