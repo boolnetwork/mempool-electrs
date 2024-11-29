@@ -297,10 +297,10 @@ impl From<BNetwork> for Network {
 impl From<DNetwork> for Network {
     fn from(network: DNetwork) -> Self {
         match network {
-            DNetwork::Bitcoin => Network::Bitcoin,
-            DNetwork::Testnet => Network::Testnet,
-            DNetwork::Regtest => Network::Regtest,
-            DNetwork::Signet => Network::Signet,
+            DNetwork::Bitcoin => Network::Dogecoin,
+            DNetwork::Testnet => Network::DogecoinTestnet,
+            DNetwork::Regtest => Network::DogecoinRegtest,
+            _ => unreachable!()
         }
     }
 }
