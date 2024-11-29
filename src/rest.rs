@@ -1888,7 +1888,7 @@ fn to_scripthash(
 fn address_to_doge_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpError> {
     let addr = dogecoin::Address::from_str(addr)?;
     if !matches!(addr.network, DNetwork::Bitcoin | DNetwork::Testnet | DNetwork::Regtest) {
-        return Err(HttpError::from("invalid dogecoin address"))
+        return Err(HttpError::from("Invalid dogecoin address".to_string()))
     }
     let addr_network = Network::from(addr.network);
     if addr_network.ne(&network) {
