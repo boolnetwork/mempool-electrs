@@ -42,7 +42,6 @@ use std::num::ParseIntError;
 use std::os::unix::fs::FileTypeExt;
 use std::sync::Arc;
 use std::thread;
-use dogecoin::hashes::hex::Error;
 use sha2::{Digest, Sha256};
 use url::form_urlencoded;
 
@@ -343,7 +342,8 @@ impl TxOutValue {
         let script = &txout.script_pubkey;
         let script_asm = script.to_asm();
         let script_addr = if matches!(config.network_type, Network::Dogecoin | Network::DogecoinRegtest | Network::DogecoinTestnet) {
-            match dogecoin::blockdata::script::Script::from_str(&script.to_string()) {
+            use dogecoin::hashes::hex::FromHex;
+            match dogecoin::blockdata::script::Script::from_hex(&script.to_hex()) {
                 Ok(doge_script) => {
                     doge_script.to_address_str(config.network_type)
                 }
