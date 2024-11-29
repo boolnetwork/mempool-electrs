@@ -20,6 +20,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Response, Server, StatusCode};
 use prometheus::{HistogramOpts, HistogramVec};
 use tokio::sync::oneshot;
+use dogecoin::network::constants::Network as DNetwork;
 
 use hyperlocal::UnixServerExt;
 use std::{cmp, fs};
@@ -1886,6 +1887,9 @@ fn to_scripthash(
 #[cfg(not(feature = "liquid"))]
 fn address_to_doge_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpError> {
     let addr = dogecoin::Address::from_str(addr)?;
+    if !matches!(addr.network, DNetwork::Bitcoin | DNetwork::Testnet | DNetwork::Regtest) {
+        return Err(HttpError::from("invalid dogecoin address"))
+    }
     let addr_network = Network::from(addr.network);
     if addr_network.ne(&network) {
         bail!(HttpError::from("Address on invalid network".to_string()))
