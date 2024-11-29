@@ -2316,5 +2316,6 @@ fn test_doge_block() {
     assert_eq!(bblock.txdata[0].output[0].script_pubkey.to_string(), dblock.txdata[0].output[0].script_pubkey.to_string());
     assert_eq!(bblock.txdata[0].output[0].script_pubkey.to_hex(), dblock.txdata[0].output[0].script_pubkey.to_hex());
     let dscript = dogecoin::Script::from_hex(&bblock.txdata[0].output[0].script_pubkey.to_hex()).unwrap();
-    println!("{}", dscript.to_address_str(Network::DogecoinTestnet).unwrap())
+    println!("{}", dscript.to_address_str(Network::DogecoinTestnet).unwrap());
+    println!("{}", dscript.to_string());
 }

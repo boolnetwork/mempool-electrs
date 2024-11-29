@@ -173,19 +173,15 @@ impl TransactionValue {
         let sigops = transaction_sigop_count(&tx, &prevouts)
             .map_err(|_| errors::Error::from("Couldn't count sigops"))? as u32;
 
-        let vins: Vec<TxInValue> = tx
-            .input
-            .iter()
-            .enumerate()
-            .map(|(index, txin)| {
-                TxInValue::new(txin, prevouts.get(&(index as u32)).cloned(), config)
-            })
-            .collect();
-        let vouts: Vec<TxOutValue> = tx
-            .output
-            .iter()
-            .map(|txout| TxOutValue::new(txout, config))
-            .collect();
+        let mut vins = vec![];
+        for (index, txin) in tx.input.iter().enumerate() {
+            vins.push(TxInValue::new(txin, prevouts.get(&(index as u32)).cloned(), config)?)
+        }
+
+        let mut vouts = vec![];
+        for txout in tx.output.iter(){
+            vouts.push(TxOutValue::new(txout, config)?)
+        }
 
         let fee = get_tx_fee(&tx, &prevouts, config.network_type);
 
@@ -230,7 +226,7 @@ struct TxInValue {
 }
 
 impl TxInValue {
-    fn new(txin: &TxIn, prevout: Option<&TxOut>, config: &Config) -> Self {
+    fn new(txin: &TxIn, prevout: Option<&TxOut>, config: &Config) -> Result<Self, errors::Error> {
         let witness = &txin.witness;
         #[cfg(feature = "liquid")]
             let witness = &witness.script_witness;
@@ -245,35 +241,43 @@ impl TxInValue {
 
         let innerscripts = prevout.map(|prevout| get_innerscripts(txin, prevout));
 
-        TxInValue {
-            txid: txin.previous_output.txid,
-            vout: txin.previous_output.vout,
-            prevout: prevout.map(|prevout| TxOutValue::new(prevout, config)),
-            scriptsig_asm: txin.script_sig.to_asm(),
-            witness,
+        let prevout = if let Some(prevout) = prevout {
+            Some(TxOutValue::new(prevout, config)?)
+        }else {
+            None
+        };
 
-            inner_redeemscript_asm: innerscripts
-                .as_ref()
-                .and_then(|i| i.redeem_script.as_ref())
-                .map(ScriptToAsm::to_asm),
-            inner_witnessscript_asm: innerscripts
-                .as_ref()
-                .and_then(|i| i.witness_script.as_ref())
-                .map(ScriptToAsm::to_asm),
+        Ok(
+            TxInValue {
+                txid: txin.previous_output.txid,
+                vout: txin.previous_output.vout,
+                prevout,
+                scriptsig_asm: txin.script_sig.to_asm(),
+                witness,
 
-            is_coinbase,
-            sequence: txin.sequence,
-            #[cfg(feature = "liquid")]
-            is_pegin: txin.is_pegin,
-            #[cfg(feature = "liquid")]
-            issuance: if txin.has_issuance() {
-                Some(IssuanceValue::from(txin))
-            } else {
-                None
-            },
+                inner_redeemscript_asm: innerscripts
+                    .as_ref()
+                    .and_then(|i| i.redeem_script.as_ref())
+                    .map(ScriptToAsm::to_asm),
+                inner_witnessscript_asm: innerscripts
+                    .as_ref()
+                    .and_then(|i| i.witness_script.as_ref())
+                    .map(ScriptToAsm::to_asm),
 
-            scriptsig: txin.script_sig.clone(),
-        }
+                is_coinbase,
+                sequence: txin.sequence,
+                #[cfg(feature = "liquid")]
+                is_pegin: txin.is_pegin,
+                #[cfg(feature = "liquid")]
+                issuance: if txin.has_issuance() {
+                    Some(IssuanceValue::from(txin))
+                } else {
+                    None
+                },
+
+                scriptsig: txin.script_sig.clone(),
+            }
+        )
     }
 }
 
@@ -311,7 +315,7 @@ struct TxOutValue {
 }
 
 impl TxOutValue {
-    fn new(txout: &TxOut, config: &Config) -> Self {
+    fn new(txout: &TxOut, config: &Config) -> Result<Self, errors::Error> {
         #[cfg(not(feature = "liquid"))]
             let value = txout.value;
 
@@ -343,14 +347,17 @@ impl TxOutValue {
         let script_asm = script.to_asm();
         let script_addr = if matches!(config.network_type, Network::Dogecoin | Network::DogecoinRegtest | Network::DogecoinTestnet) {
             use dogecoin::hashes::hex::FromHex;
-            match dogecoin::blockdata::script::Script::from_hex(&script.to_hex()) {
-                Ok(doge_script) => {
-                    doge_script.to_address_str(config.network_type)
+            if !script.is_op_return() {
+                match dogecoin::blockdata::script::Script::from_hex(&script.to_hex()) {
+                    Ok(doge_script) => {
+                        doge_script.to_address_str(config.network_type)
+                    }
+                    Err(err) => {
+                        return Err(errors::Error::from(format!("Failed to parse btc script to doge script: {}", err)))
+                    }
                 }
-                Err(err) => {
-                    error!("Failed to parse script to doge's: {}", err);
-                    None
-                }
+            }else {
+                None
             }
         } else {
             script.to_address_str(config.network_type)
@@ -387,21 +394,23 @@ impl TxOutValue {
         #[cfg(feature = "liquid")]
             let pegout = PegoutValue::from_txout(txout, config.network_type, config.parent_network);
 
-        TxOutValue {
-            scriptpubkey: script.clone(),
-            scriptpubkey_asm: script_asm,
-            scriptpubkey_address: script_addr,
-            scriptpubkey_type: script_type.to_string(),
-            value,
-            #[cfg(feature = "liquid")]
-            valuecommitment,
-            #[cfg(feature = "liquid")]
-            asset,
-            #[cfg(feature = "liquid")]
-            assetcommitment,
-            #[cfg(feature = "liquid")]
-            pegout,
-        }
+        Ok(
+            TxOutValue {
+                scriptpubkey: script.clone(),
+                scriptpubkey_asm: script_asm,
+                scriptpubkey_address: script_addr,
+                scriptpubkey_type: script_type.to_string(),
+                value,
+                #[cfg(feature = "liquid")]
+                valuecommitment,
+                #[cfg(feature = "liquid")]
+                asset,
+                #[cfg(feature = "liquid")]
+                assetcommitment,
+                #[cfg(feature = "liquid")]
+                pegout,
+            }
+        )
     }
 }
 
