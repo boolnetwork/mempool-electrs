@@ -42,6 +42,7 @@ use std::num::ParseIntError;
 use std::os::unix::fs::FileTypeExt;
 use std::sync::Arc;
 use std::thread;
+use dogecoin::hashes::hex::Error;
 use sha2::{Digest, Sha256};
 use url::form_urlencoded;
 
@@ -341,7 +342,20 @@ impl TxOutValue {
 
         let script = &txout.script_pubkey;
         let script_asm = script.to_asm();
-        let script_addr = script.to_address_str(config.network_type);
+        let script_addr = if matches!(config.network_type, Network::Dogecoin | Network::DogecoinRegtest | Network::DogecoinTestnet) {
+            match dogecoin::blockdata::script::Script::from_str(&script.to_string()) {
+                Ok(doge_script) => {
+                    doge_script.to_address_str(config.network_type)
+                }
+                Err(err) => {
+                    error!("Failed to parse script to doge's: {}", err);
+                    None
+                }
+            }
+        } else {
+            script.to_address_str(config.network_type)
+        };
+
 
         // TODO should the following something to put inside rust-elements lib?
         let script_type = if is_fee {
@@ -1888,7 +1902,7 @@ fn to_scripthash(
 fn address_to_doge_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpError> {
     let addr = dogecoin::Address::from_str(addr)?;
     if !matches!(addr.network, DNetwork::Bitcoin | DNetwork::Testnet | DNetwork::Regtest) {
-        return Err(HttpError::from("Invalid dogecoin address".to_string()))
+        return Err(HttpError::from("Invalid dogecoin address".to_string()));
     }
     let addr_network = Network::from(addr.network);
     if addr_network.ne(&network) {
@@ -1898,8 +1912,8 @@ fn address_to_doge_scripthash(addr: &str, network: Network) -> Result<FullHash, 
     hasher.update(addr.script_pubkey().as_bytes());
     Ok(
         hasher.finalize()[..]
-        .try_into()
-        .expect("SHA256 size is 32 bytes")
+            .try_into()
+            .expect("SHA256 size is 32 bytes")
     )
 }
 

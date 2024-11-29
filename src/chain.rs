@@ -282,6 +282,18 @@ impl From<Network> for BNetwork {
 }
 
 #[cfg(not(feature = "liquid"))]
+impl From<Network> for DNetwork {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Dogecoin => DNetwork::Bitcoin,
+            Network::DogecoinTestnet => DNetwork::Testnet,
+            Network::DogecoinRegtest => DNetwork::Regtest,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[cfg(not(feature = "liquid"))]
 impl From<BNetwork> for Network {
     fn from(network: BNetwork) -> Self {
         match network {

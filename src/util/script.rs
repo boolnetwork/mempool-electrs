@@ -28,6 +28,20 @@ impl ScriptToAddr for bitcoin::Script {
         bitcoin::Address::from_script(self, network.into()).map(|s| s.to_string())
     }
 }
+
+#[cfg(not(feature = "liquid"))]
+impl ScriptToAddr for dogecoin::Script {
+    fn to_address_str(&self, network: Network) -> Option<String> {
+        match dogecoin::Address::from_script(self, network.into()).map(|s| s.to_string()) {
+            Ok(addr) => Some(addr),
+            Err(err) => {
+                error!("Failed to convert script to address: {}", err);
+                None
+            }
+        }
+    }
+}
+
 #[cfg(feature = "liquid")]
 impl ScriptToAddr for elements::Script {
     fn to_address_str(&self, network: Network) -> Option<String> {
