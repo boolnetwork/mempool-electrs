@@ -99,7 +99,7 @@ pub fn request(addr: &str, _auth: String, req: &Value) -> crate::errors::Result<
         response.clone(),
         String::new(),
     )
-    .map_err(|e| format!("{e:?} {response}"))?;
+        .map_err(|e| format!("{e:?} {response}"))?;
 
     let result: Value = serde_json::from_str(&response).map_err(|_| "json error".to_string())?;
     Ok(result)
@@ -213,18 +213,12 @@ pub fn add_blocks_blkfiles(
 
         trace!("parsing {} bytes", blob.len());
         let blocks = match daemon.network() {
-            Network::Bitcoin
-            | Network::Testnet
-            | Network::Testnet4
-            | Fractal
-            | FractalTestnet
-            | Network::Regtest
-            | Network::Signet => crate::new_index::fetch::sgx_parse_blocks(blob, magic),
-            Dogecoin | DogecoinTestnet | DogecoinRegtest => {
+            Network::Bitcoin | Network::Testnet | Network::Testnet4 | Network::Regtest | Network::Signet => crate::new_index::fetch::sgx_parse_blocks(blob, magic),
+            Dogecoin | DogecoinTestnet | DogecoinRegtest | Fractal | FractalTestnet => {
                 crate::new_index::fetch::sgx_parse_aux_blocks(blob, magic)
             }
         }
-        .expect("failed to parse blk*.dat file");
+            .expect("failed to parse blk*.dat file");
 
         let block_entries: Vec<crate::new_index::BlockEntry> = blocks
             .into_iter()
@@ -277,7 +271,7 @@ pub fn index(
             for entries in new_headers.chunks(100) {
                 let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
                 #[cfg(not(feature = "liquid"))]
-                let blocks = match daemon.network() {
+                    let blocks = match daemon.network() {
                     Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => {
                         daemon
                             .get_blocks_has_aux(&blockhashes)
@@ -289,7 +283,7 @@ pub fn index(
                 };
 
                 #[cfg(feature = "liquid")]
-                let blocks = daemon
+                    let blocks = daemon
                     .getblocks(&blockhashes)
                     .expect("failed to get blocks from bitcoind");
 
@@ -331,8 +325,16 @@ pub fn index(
                     .unwrap_or_else(|e| panic!("failed to read {:?}: {:?}", path, e));
 
                 trace!("parsing {} bytes", blob.len());
-                let blocks = crate::new_index::fetch::sgx_parse_blocks(blob, magic)
-                    .expect("failed to parse blk*.dat file");
+                let blocks = match daemon.network() {
+                    Network::Bitcoin | Network::Testnet | Network::Testnet4 | Network::Regtest | Network::Signet => {
+                        crate::new_index::fetch::sgx_parse_blocks(blob, magic)
+                            .expect("failed to parse blk*.dat file")
+                    }
+                    Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => {
+                        crate::new_index::fetch::sgx_parse_aux_blocks(blob, magic)
+                            .expect("failed to parse blk*.dat file")
+                    }
+                };
 
                 let block_entries: Vec<crate::new_index::BlockEntry> = blocks
                     .into_iter()
