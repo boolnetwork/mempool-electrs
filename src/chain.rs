@@ -21,6 +21,7 @@ pub use {
 
 use bitcoin::blockdata::constants::genesis_block;
 pub use bitcoin::network::constants::Network as BNetwork;
+pub use dogecoin::network::constants::Network as DNetwork;
 
 #[cfg(not(feature = "liquid"))]
 pub type Value = u64;
@@ -288,6 +289,18 @@ impl From<BNetwork> for Network {
             BNetwork::Testnet => Network::Testnet,
             BNetwork::Regtest => Network::Regtest,
             BNetwork::Signet => Network::Signet,
+        }
+    }
+}
+
+#[cfg(not(feature = "liquid"))]
+impl From<DNetwork> for Network {
+    fn from(network: DNetwork) -> Self {
+        match network {
+            DNetwork::Bitcoin => Network::Bitcoin,
+            DNetwork::Testnet => Network::Testnet,
+            DNetwork::Regtest => Network::Regtest,
+            DNetwork::Signet => Network::Signet,
         }
     }
 }

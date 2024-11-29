@@ -623,14 +623,13 @@ impl Config {
                 | Network::Testnet
                 | Network::Testnet4
                 | Network::Regtest
-                | Network::Signet
-                | Network::Fractal
-                | Network::FractalTestnet => {
+                | Network::Signet => {
                     assert!(spv_url.ends_with("btc"));
                 }
                 Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => {
                     assert!(spv_url.ends_with("doge"));
                 }
+                _ => unreachable!()
             }
         }
 
