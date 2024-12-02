@@ -24,6 +24,11 @@ const CONF_TARGETS: [u16; 28] = [
     16u16, 17u16, 18u16, 19u16, 20u16, 21u16, 22u16, 23u16, 24u16, 25u16, 144u16, 504u16, 1008u16,
 ];
 
+const DOGE_CONF_TARGETS: [u16; 25] = [
+    1u16, 2u16, 3u16, 4u16, 5u16, 6u16, 7u16, 8u16, 9u16, 10u16, 11u16, 12u16, 13u16, 14u16, 15u16,
+    16u16, 17u16, 18u16, 19u16, 20u16, 21u16, 22u16, 23u16, 24u16, 25u16,
+];
+
 pub struct Query {
     chain: Arc<ChainQuery>, // TODO: should be used as read-only
     mempool: Arc<RwLock<Mempool>>,
@@ -224,7 +229,12 @@ impl Query {
     }
 
     fn update_fee_estimates(&self) {
-        match self.daemon.estimatesmartfee_batch(&CONF_TARGETS) {
+        let conf_target = if matches!(self.network(), Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest) {
+            DOGE_CONF_TARGETS.as_slice()
+        } else {
+            CONF_TARGETS.as_slice()
+        };
+        match self.daemon.estimatesmartfee_batch(conf_target) {
             Ok(estimates) => {
                 *self.cached_estimates.write().unwrap() = (estimates, Some(Instant::now()));
             }
