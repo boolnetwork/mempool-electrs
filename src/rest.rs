@@ -173,15 +173,19 @@ impl TransactionValue {
         let sigops = transaction_sigop_count(&tx, &prevouts)
             .map_err(|_| errors::Error::from("Couldn't count sigops"))? as u32;
 
-        let mut vins = vec![];
-        for (index, txin) in tx.input.iter().enumerate() {
-            vins.push(TxInValue::new(txin, prevouts.get(&(index as u32)).cloned(), config)?)
-        }
-
-        let mut vouts = vec![];
-        for txout in tx.output.iter(){
-            vouts.push(TxOutValue::new(txout, config)?)
-        }
+        let vins: Vec<TxInValue> = tx
+            .input
+            .iter()
+            .enumerate()
+            .map(|(index, txin)| {
+                TxInValue::new(txin, prevouts.get(&(index as u32)).cloned(), config)
+            })
+            .collect();
+        let vouts: Vec<TxOutValue> = tx
+            .output
+            .iter()
+            .map(|txout| TxOutValue::new(txout, config))
+            .collect();
 
         let fee = get_tx_fee(&tx, &prevouts, config.network_type);
 
@@ -226,7 +230,7 @@ struct TxInValue {
 }
 
 impl TxInValue {
-    fn new(txin: &TxIn, prevout: Option<&TxOut>, config: &Config) -> Result<Self, errors::Error> {
+    fn new(txin: &TxIn, prevout: Option<&TxOut>, config: &Config) -> Self {
         let witness = &txin.witness;
         #[cfg(feature = "liquid")]
             let witness = &witness.script_witness;
@@ -242,42 +246,40 @@ impl TxInValue {
         let innerscripts = prevout.map(|prevout| get_innerscripts(txin, prevout));
 
         let prevout = if let Some(prevout) = prevout {
-            Some(TxOutValue::new(prevout, config)?)
-        }else {
+            Some(TxOutValue::new(prevout, config))
+        } else {
             None
         };
 
-        Ok(
-            TxInValue {
-                txid: txin.previous_output.txid,
-                vout: txin.previous_output.vout,
-                prevout,
-                scriptsig_asm: txin.script_sig.to_asm(),
-                witness,
+        TxInValue {
+            txid: txin.previous_output.txid,
+            vout: txin.previous_output.vout,
+            prevout,
+            scriptsig_asm: txin.script_sig.to_asm(),
+            witness,
 
-                inner_redeemscript_asm: innerscripts
-                    .as_ref()
-                    .and_then(|i| i.redeem_script.as_ref())
-                    .map(ScriptToAsm::to_asm),
-                inner_witnessscript_asm: innerscripts
-                    .as_ref()
-                    .and_then(|i| i.witness_script.as_ref())
-                    .map(ScriptToAsm::to_asm),
+            inner_redeemscript_asm: innerscripts
+                .as_ref()
+                .and_then(|i| i.redeem_script.as_ref())
+                .map(ScriptToAsm::to_asm),
+            inner_witnessscript_asm: innerscripts
+                .as_ref()
+                .and_then(|i| i.witness_script.as_ref())
+                .map(ScriptToAsm::to_asm),
 
-                is_coinbase,
-                sequence: txin.sequence,
-                #[cfg(feature = "liquid")]
-                is_pegin: txin.is_pegin,
-                #[cfg(feature = "liquid")]
-                issuance: if txin.has_issuance() {
-                    Some(IssuanceValue::from(txin))
-                } else {
-                    None
-                },
+            is_coinbase,
+            sequence: txin.sequence,
+            #[cfg(feature = "liquid")]
+            is_pegin: txin.is_pegin,
+            #[cfg(feature = "liquid")]
+            issuance: if txin.has_issuance() {
+                Some(IssuanceValue::from(txin))
+            } else {
+                None
+            },
 
-                scriptsig: txin.script_sig.clone(),
-            }
-        )
+            scriptsig: txin.script_sig.clone(),
+        }
     }
 }
 
@@ -315,7 +317,7 @@ struct TxOutValue {
 }
 
 impl TxOutValue {
-    fn new(txout: &TxOut, config: &Config) -> Result<Self, errors::Error> {
+    fn new(txout: &TxOut, config: &Config) -> Self {
         #[cfg(not(feature = "liquid"))]
             let value = txout.value;
 
@@ -353,10 +355,11 @@ impl TxOutValue {
                         doge_script.to_address_str(config.network_type)
                     }
                     Err(err) => {
-                        return Err(errors::Error::from(format!("Failed to parse btc script to doge script: {}", err)))
+                        error!("Failed to convert btc script to doge script: {}, btc scrpt: {:?}", err, script);
+                        None
                     }
                 }
-            }else {
+            } else {
                 None
             }
         } else {
@@ -394,23 +397,21 @@ impl TxOutValue {
         #[cfg(feature = "liquid")]
             let pegout = PegoutValue::from_txout(txout, config.network_type, config.parent_network);
 
-        Ok(
-            TxOutValue {
-                scriptpubkey: script.clone(),
-                scriptpubkey_asm: script_asm,
-                scriptpubkey_address: script_addr,
-                scriptpubkey_type: script_type.to_string(),
-                value,
-                #[cfg(feature = "liquid")]
-                valuecommitment,
-                #[cfg(feature = "liquid")]
-                asset,
-                #[cfg(feature = "liquid")]
-                assetcommitment,
-                #[cfg(feature = "liquid")]
-                pegout,
-            }
-        )
+        TxOutValue {
+            scriptpubkey: script.clone(),
+            scriptpubkey_asm: script_asm,
+            scriptpubkey_address: script_addr,
+            scriptpubkey_type: script_type.to_string(),
+            value,
+            #[cfg(feature = "liquid")]
+            valuecommitment,
+            #[cfg(feature = "liquid")]
+            asset,
+            #[cfg(feature = "liquid")]
+            assetcommitment,
+            #[cfg(feature = "liquid")]
+            pegout,
+        }
     }
 }
 
@@ -736,6 +737,7 @@ fn handle_request(
             query.chain().best_hash().to_hex(),
             TTL_SHORT,
             config.sgx_enable,
+            config.sgx_test,
         ),
 
         (&Method::GET, Some(&"blocks"), Some(&"tip"), Some(&"height"), None, None) => http_message(
@@ -743,6 +745,7 @@ fn handle_request(
             query.chain().best_height().to_string(),
             TTL_SHORT,
             config.sgx_enable,
+            config.sgx_test,
         ),
 
         (
@@ -766,6 +769,7 @@ fn handle_request(
                 height.to_string(),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -785,6 +789,7 @@ fn handle_request(
                 header.hash().to_hex(),
                 ttl,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::GET, Some(&"block"), Some(hash), None, None, None) => {
@@ -794,13 +799,13 @@ fn handle_request(
                 .get_block_with_meta(&hash)
                 .ok_or_else(|| HttpError::not_found("Block not found".to_string()))?;
             let block_value = BlockValue::new(blockhm);
-            json_response(block_value, TTL_LONG, config.sgx_enable)
+            json_response(block_value, TTL_LONG, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"status"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
             let status = query.chain().get_block_status(&hash);
             let ttl = ttl_by_depth(status.height, query);
-            json_response(status, ttl, config.sgx_enable)
+            json_response(status, ttl, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txids"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
@@ -808,7 +813,7 @@ fn handle_request(
                 .chain()
                 .get_block_txids(&hash)
                 .ok_or_else(|| HttpError::not_found("Block not found".to_string()))?;
-            json_response(txids, TTL_LONG, config.sgx_enable)
+            json_response(txids, TTL_LONG, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&INTERNAL_PREFIX), Some(&"block"), Some(hash), Some(&"txs"), None) => {
             let hash = BlockHash::from_hex(hash)?;
@@ -822,7 +827,7 @@ fn handle_request(
                 .collect();
 
             let ttl = ttl_by_depth(block_id.map(|b| b.height), query);
-            json_response(prepare_txs(txs, query, config), ttl, config.sgx_enable)
+            json_response(prepare_txs(txs, query, config), ttl, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"header"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
@@ -832,7 +837,7 @@ fn handle_request(
                 .ok_or_else(|| HttpError::not_found("Block not found".to_string()))?;
 
             let header_hex = hex::encode(encode::serialize(&header));
-            http_message(StatusCode::OK, header_hex, TTL_LONG, config.sgx_enable)
+            http_message(StatusCode::OK, header_hex, TTL_LONG, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"raw"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
@@ -864,6 +869,7 @@ fn handle_request(
                 txids[index].to_hex(),
                 TTL_LONG,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txs"), start_index, None) => {
@@ -904,7 +910,7 @@ fn handle_request(
             // XXX orphraned blocks alway get TTL_SHORT
             let ttl = ttl_by_depth(confirmed_blockid.map(|b| b.height), query);
 
-            json_response(prepare_txs(txs, query, config), ttl, config.sgx_enable)
+            json_response(prepare_txs(txs, query, config), ttl, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(script_type @ &"address"), Some(script_str), None, None, None)
         | (&Method::GET, Some(script_type @ &"scripthash"), Some(script_str), None, None, None) => {
@@ -918,6 +924,7 @@ fn handle_request(
                 }),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (
@@ -948,6 +955,7 @@ fn handle_request(
                 }),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (
@@ -1027,6 +1035,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1064,6 +1073,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (
@@ -1096,7 +1106,7 @@ fn handle_request(
                 .chain()
                 .summary(&script_hash[..], last_seen_txid.as_ref(), max_txs);
 
-            json_response(summary, TTL_SHORT, config.sgx_enable)
+            json_response(summary, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (
             &Method::GET,
@@ -1131,6 +1141,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1157,7 +1168,7 @@ fn handle_request(
                 .map(UtxoValue::from)
                 .collect();
             // XXX paging?
-            json_response(utxos, TTL_SHORT, config.sgx_enable)
+            json_response(utxos, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         (
@@ -1204,7 +1215,7 @@ fn handle_request(
             }
 
             // XXX paging?
-            json_response(choose_list, TTL_SHORT, config.sgx_enable)
+            json_response(choose_list, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::POST, Some(&"runes_extra_data"), None, None, None, None) => {
@@ -1218,7 +1229,7 @@ fn handle_request(
             let tx: bitcoin_new::Transaction = bitcoin_new::consensus::deserialize(&rawtx)
                 .map_err(|e| HttpError::from(e.to_string()))?;
             let op_return = parse_cross_data_from_op_return(&tx, is_deposit)?;
-            http_message(StatusCode::OK, op_return.to_hex(), 0, config.sgx_enable)
+            http_message(StatusCode::OK, op_return.to_hex(), 0, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::GET, Some(&"address-prefix"), Some(prefix), None, None, None) => {
@@ -1226,7 +1237,7 @@ fn handle_request(
                 return Err(HttpError::from("address search disabled".to_string()));
             }
             let results = query.chain().address_search(prefix, ADDRESS_SEARCH_LIMIT);
-            json_response(results, TTL_SHORT, config.sgx_enable)
+            json_response(results, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"tx"), Some(hash), None, None, None) => {
             let hash = Txid::from_hex(hash)?;
@@ -1244,9 +1255,10 @@ fn handle_request(
                     "Transaction missing prevouts",
                     0,
                     config.sgx_enable,
+                    config.sgx_test,
                 )
             } else {
-                json_response(tx.remove(0), ttl, config.sgx_enable)
+                json_response(tx.remove(0), ttl, config.sgx_enable, config.sgx_test)
             }
         }
         (&Method::POST, Some(&INTERNAL_PREFIX), Some(&"txs"), None, None, None) => {
@@ -1267,13 +1279,14 @@ fn handle_request(
                                 .map(|tx| (tx, query.chain().tx_confirming_block(txid)))
                         })
                         .collect();
-                    json_response(prepare_txs(txs, query, config), 0, config.sgx_enable)
+                    json_response(prepare_txs(txs, query, config), 0, config.sgx_enable, config.sgx_test)
                 }
                 Err(err) => http_message(
                     StatusCode::BAD_REQUEST,
                     err.to_string(),
                     0,
                     config.sgx_enable,
+                    config.sgx_test,
                 ),
             }
         }
@@ -1303,7 +1316,7 @@ fn handle_request(
             let hash = Txid::from_hex(hash)?;
             let status = query.get_tx_status(&hash);
             let ttl = ttl_by_depth(status.block_height, query);
-            json_response(status, ttl, config.sgx_enable)
+            json_response(status, ttl, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"merkle-proof"), None, None) => {
@@ -1319,6 +1332,7 @@ fn handle_request(
                 json!({ "block_height": blockid.height, "merkle": merkle, "pos": pos }),
                 ttl,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         #[cfg(not(feature = "liquid"))]
@@ -1338,6 +1352,7 @@ fn handle_request(
                 hex::encode(encode::serialize(&merkleblock)),
                 ttl_by_depth(height, query),
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"outspend"), Some(index), None) => {
@@ -1353,7 +1368,7 @@ fn handle_request(
                 spend.status.as_ref().and_then(|status| status.block_height),
                 query,
             );
-            json_response(spend, ttl, config.sgx_enable)
+            json_response(spend, ttl, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"outspends"), None, None) => {
             let hash = Txid::from_hex(hash)?;
@@ -1366,7 +1381,7 @@ fn handle_request(
                 .map(|spend| spend.map_or_else(SpendingValue::default, SpendingValue::from))
                 .collect();
             // @TODO long ttl if all outputs are either spent long ago or unspendable
-            json_response(spends, TTL_SHORT, config.sgx_enable)
+            json_response(spends, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"broadcast"), None, None, None, None)
         | (&Method::POST, Some(&"tx"), None, None, None, None) => {
@@ -1384,13 +1399,14 @@ fn handle_request(
                         "Invalid method",
                         0,
                         config.sgx_enable,
+                        config.sgx_test,
                     );
                 }
             };
             let txid = query
                 .broadcast_raw(&txhex)
                 .map_err(|err| HttpError::from(err.description().to_string()))?;
-            http_message(StatusCode::OK, txid.to_hex(), 0, config.sgx_enable)
+            http_message(StatusCode::OK, txid.to_hex(), 0, config.sgx_enable, config.sgx_test)
         }
         (&Method::POST, Some(&"txs"), Some(&"test"), None, None, None) => {
             let txhexes: Vec<String> =
@@ -1432,7 +1448,7 @@ fn handle_request(
                 .test_mempool_accept(txhexes, maxfeerate)
                 .map_err(|err| HttpError::from(err.description().to_string()))?;
 
-            json_response(result, TTL_SHORT, config.sgx_enable)
+            json_response(result, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"txs"), Some(&"outspends"), None, None, None) => {
             let txid_strings: Vec<&str> = query_params
@@ -1448,6 +1464,7 @@ fn handle_request(
                     "Too many txids requested",
                     0,
                     config.sgx_enable,
+                    config.sgx_test,
                 );
             }
 
@@ -1469,7 +1486,7 @@ fn handle_request(
                 })
                 .collect();
 
-            json_response(spends, TTL_SHORT, config.sgx_enable)
+            json_response(spends, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (
             &Method::POST,
@@ -1500,7 +1517,7 @@ fn handle_request(
                 })
                 .collect();
 
-            json_response(spends, TTL_SHORT, config.sgx_enable)
+            json_response(spends, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (
             &Method::POST,
@@ -1532,16 +1549,17 @@ fn handle_request(
                 })
                 .collect();
 
-            json_response(spends, TTL_SHORT, config.sgx_enable)
+            json_response(spends, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::GET, Some(&"mempool"), None, None, None, None) => json_response(
             query.mempool().backlog_stats(),
             TTL_SHORT,
             config.sgx_enable,
+            config.sgx_test,
         ),
         (&Method::GET, Some(&"mempool"), Some(&"txids"), None, None, None) => {
-            json_response(query.mempool().txids(), TTL_SHORT, config.sgx_enable)
+            json_response(query.mempool().txids(), TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"mempool"), Some(&"txids"), Some(&"page"), last_seen_txid, None) => {
             let last_seen_txid = last_seen_txid.and_then(|txid| Txid::from_hex(txid).ok());
@@ -1553,6 +1571,7 @@ fn handle_request(
                 query.mempool().txids_page(max_txs, last_seen_txid),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (
@@ -1574,6 +1593,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::POST, Some(&INTERNAL_PREFIX), Some(&"mempool"), Some(&"txs"), None, None) => {
@@ -1594,13 +1614,14 @@ fn handle_request(
                             .collect()
                     };
 
-                    json_response(prepare_txs(txs, query, config), 0, config.sgx_enable)
+                    json_response(prepare_txs(txs, query, config), 0, config.sgx_enable, config.sgx_test)
                 }
                 Err(err) => http_message(
                     StatusCode::BAD_REQUEST,
                     err.to_string(),
                     0,
                     config.sgx_enable,
+                    config.sgx_test,
                 ),
             }
         }
@@ -1628,16 +1649,17 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::GET, Some(&"mempool"), Some(&"recent"), None, None, None) => {
             let mempool = query.mempool();
             let recent = mempool.recent_txs_overview();
-            json_response(recent, TTL_MEMPOOL_RECENT, config.sgx_enable)
+            json_response(recent, TTL_MEMPOOL_RECENT, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::GET, Some(&"fee-estimates"), None, None, None, None) => {
-            json_response(query.estimate_fee_map(), TTL_SHORT, config.sgx_enable)
+            json_response(query.estimate_fee_map(), TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         #[cfg(feature = "liquid")]
@@ -1674,7 +1696,7 @@ fn handle_request(
                 .lookup_asset(&asset_id)?
                 .ok_or_else(|| HttpError::not_found("Asset id not found".to_string()))?;
 
-            json_response(asset_entry, TTL_SHORT, config.sgx_enable)
+            json_response(asset_entry, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         #[cfg(feature = "liquid")]
@@ -1703,6 +1725,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1733,6 +1756,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1751,6 +1775,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1773,6 +1798,7 @@ fn handle_request(
                     supply_dec.to_string(),
                     TTL_SHORT,
                     config.sgx_enable,
+                    config.sgx_test,
                 )
             } else {
                 http_message(
@@ -1780,6 +1806,7 @@ fn handle_request(
                     supply.to_string(),
                     TTL_SHORT,
                     config.sgx_enable,
+                    config.sgx_test,
                 )
             }
         }
@@ -1796,25 +1823,40 @@ fn http_message<T>(
     message: T,
     ttl: u32,
     sgx: bool,
+    sgx_test: bool,
 ) -> Result<Response<Body>, HttpError>
     where
-        T: Serialize,
+        T: Into<Body> + Serialize,
 {
-    let value = crate::reg::create_sgx_response(message, sgx);
+    if sgx {
+        let value = crate::reg::create_sgx_response(message, sgx_test);
 
-    Ok(Response::builder()
-        .status(status)
-        .header("Content-Type", "text/plain")
-        .header("Cache-Control", format!("public, max-age={:}", ttl))
-        .header("X-Powered-By", &**VERSION_STRING)
-        .body(Body::from(value))
-        .unwrap())
+        Ok(Response::builder()
+            .status(status)
+            .header("Content-Type", "text/plain")
+            .header("Cache-Control", format!("public, max-age={:}", ttl))
+            .header("X-Powered-By", &**VERSION_STRING)
+            .body(Body::from(value))
+            .unwrap())
+    } else {
+        Ok(Response::builder()
+            .status(status)
+            .header("Content-Type", "text/plain")
+            .header("Cache-Control", format!("public, max-age={:}", ttl))
+            .header("X-Powered-By", &**VERSION_STRING)
+            .body(message.into())
+            .unwrap())
+    }
 }
 
-fn json_response<T: Serialize>(value: T, ttl: u32, sgx: bool) -> Result<Response<Body>, HttpError> {
+fn json_response<T: Serialize>(value: T, ttl: u32, sgx: bool, sgx_test: bool) -> Result<Response<Body>, HttpError> {
     //let value = serde_json::to_string(&value)?;
 
-    let value = crate::reg::create_sgx_response(value, sgx);
+    let value = if sgx {
+        crate::reg::create_sgx_response(value, sgx_test)
+    } else {
+        serde_json::to_string(&value)?
+    };
 
     Ok(Response::builder()
         .header("Content-Type", "application/json")
@@ -1882,7 +1924,7 @@ fn blocks(
             break;
         }
     }
-    json_response(values, TTL_SHORT, config.sgx_enable)
+    json_response(values, TTL_SHORT, config.sgx_enable, config.sgx_test)
 }
 
 fn to_scripthash(

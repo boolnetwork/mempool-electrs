@@ -58,11 +58,11 @@ pub fn validate_tx_root(block: &Block, entry: &HeaderEntry) {
 //     None
 // }
 
-pub fn create_sgx_response<T: serde::Serialize>(value: T, sgx_enable: bool) -> String {
-    let keytype = if sgx_enable {
-        sgx_bool_registration_tool::KeyType::SGX
-    } else {
+pub fn create_sgx_response<T: serde::Serialize>(value: T, sgx_test: bool,) -> String {
+    let keytype = if sgx_test {
         sgx_bool_registration_tool::KeyType::TEST
+    } else {
+        sgx_bool_registration_tool::KeyType::SGX
     };
 
     sgx_bool_registration_tool::create_sgx_response_v2(value, keytype)

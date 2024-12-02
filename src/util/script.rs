@@ -35,7 +35,7 @@ impl ScriptToAddr for dogecoin::Script {
         match dogecoin::Address::from_script(self, network.into()).map(|s| s.to_string()) {
             Ok(addr) => Some(addr),
             Err(err) => {
-                error!("Failed to convert script to address: {}", err);
+                error!("Failed to convert script to address: {}， script: {}", err, self);
                 None
             }
         }
