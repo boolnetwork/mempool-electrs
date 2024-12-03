@@ -332,6 +332,11 @@ impl Config {
                     .long("sgx-test")
                     .help("enable sgx and using random secret key")
                     .takes_value(false)
+        ).arg(
+            Arg::with_name("skip_sgx_seal")
+                .long("skip-sgx-seal")
+                .help("skip sealing db data")
+                .takes_value(false)
         );
 
         #[cfg(unix)]
