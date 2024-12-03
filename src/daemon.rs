@@ -23,7 +23,6 @@ use crate::util::{parse_aux_block, HeaderList};
 use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
-use crate::errors;
 
 use crate::errors::*;
 
@@ -504,13 +503,13 @@ impl Daemon {
         let chunks = params_list
             .iter()
             .map(|params| json!({"method": method, "params": params, "id": id}))
-            .chunks((|| {
+            .chunks({
                 if spv {
                     10_000
                 } else {
                     50_000
                 }
-            })()); // Max Amount of batched requests
+            }); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
         let mut failed_requests: u64 = 0;

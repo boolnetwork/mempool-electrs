@@ -22,7 +22,6 @@ use electrs::{
 
 #[cfg(feature = "liquid")]
 use electrs::elements::AssetRegistry;
-use electrs::rest::Handle;
 
 fn fetch_from(config: &Config, store: &Store) -> FetchFrom {
     let mut jsonrpc_import = config.jsonrpc_import;

@@ -208,7 +208,6 @@ pub struct ChainQuery {
     light_mode: bool,
     duration: HistogramVec,
     network: Network,
-    sgx_enable: bool,
 }
 
 // TODO: &[Block] should be an iterator / a queue.
@@ -508,7 +507,6 @@ impl ChainQuery {
                 HistogramOpts::new("query_duration", "Index query duration (in seconds)"),
                 &["name"],
             ),
-            sgx_enable: config.sgx_enable,
         }
     }
 
@@ -639,7 +637,6 @@ impl ChainQuery {
         self.store.history_db.iter_scan_from(
             &TxHistoryRow::filter(code, hash),
             &TxHistoryRow::prefix_height(code, hash, start_height as u32),
-            self.sgx_enable
         )
     }
 
@@ -647,7 +644,6 @@ impl ChainQuery {
         self.store.history_db.iter_scan_reverse(
             &TxHistoryRow::filter(code, hash),
             &TxHistoryRow::prefix_end(code, hash),
-            self.sgx_enable
         )
     }
 
@@ -1118,7 +1114,7 @@ impl ChainQuery {
         let _timer_scan = self.start_timer("address_search");
         self.store
             .history_db
-            .iter_scan(&addr_search_filter(prefix), self.sgx_enable)
+            .iter_scan(&addr_search_filter(prefix))
             .take(limit)
             .map(|row| std::str::from_utf8(&row.key[1..]).unwrap().to_string())
             .collect()
@@ -1286,7 +1282,7 @@ impl ChainQuery {
         let _timer = self.start_timer("lookup_spend");
         self.store
             .history_db
-            .iter_scan(&TxEdgeRow::filter(outpoint), false)
+            .iter_scan(&TxEdgeRow::filter(outpoint))
             .map(TxEdgeRow::from_row)
             .find_map(|edge| {
                 let txid: Txid = deserialize(&edge.key.spending_txid).unwrap();
@@ -1302,7 +1298,7 @@ impl ChainQuery {
         let headers = self.store.indexed_headers.read().unwrap();
         self.store
             .txstore_db
-            .iter_scan(&TxConfRow::filter(&txid[..]), false)
+            .iter_scan(&TxConfRow::filter(&txid[..]))
             .map(TxConfRow::from_row)
             // header_by_blockhash only returns blocks that are part of the best chain,
             // or None for orphaned blocks.
@@ -1364,14 +1360,14 @@ impl ChainQuery {
 }
 
 fn load_blockhashes(db: &DB, prefix: &[u8]) -> HashSet<BlockHash> {
-    db.iter_scan(prefix, db.sgx_enable)
+    db.iter_scan(prefix)
         .map(BlockRow::from_row)
         .map(|r| deserialize(&r.key.hash).expect("failed to parse BlockHash"))
         .collect()
 }
 
 fn load_blockheaders(db: &DB) -> HashMap<BlockHash, BlockHeader> {
-    db.iter_scan(&BlockRow::header_filter(), false)
+    db.iter_scan(&BlockRow::header_filter())
         .map(BlockRow::from_row)
         .map(|r| {
             let key: BlockHash = deserialize(&r.key.hash).expect("failed to parse BlockHash");

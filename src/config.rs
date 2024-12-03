@@ -73,6 +73,7 @@ pub struct Config {
     pub sgx_enable: bool,
     pub spv_url: String,
     pub sgx_test: bool,
+    pub skip_sgx_seal: bool,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
@@ -707,6 +708,7 @@ impl Config {
             sgx_enable,
             spv_url,
             sgx_test: m.is_present("sgx_test"),
+            skip_sgx_seal: m.is_present("skip_sgx_seal"),
 
             #[cfg(feature = "liquid")]
             parent_network,

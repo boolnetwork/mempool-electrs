@@ -23,6 +23,7 @@ pub struct ScanIterator<'a> {
     iter: rocksdb::DBIterator<'a>,
     done: bool,
     sgx_enable: bool,
+    skip_sgx_seal: bool,
 }
 
 impl<'a> Iterator for ScanIterator<'a> {
@@ -39,7 +40,7 @@ impl<'a> Iterator for ScanIterator<'a> {
         }
         Some(DBRow {
             key: key.to_vec(),
-            value: if self.sgx_enable {
+            value: if self.sgx_enable &&!self.skip_sgx_seal{
                 unseal_data(value.to_vec())
             }else {
                 value.to_vec()
@@ -53,6 +54,7 @@ pub struct ReverseScanIterator<'a> {
     iter: rocksdb::DBRawIterator<'a>,
     done: bool,
     sgx_enable: bool,
+    skip_sgx_seal: bool,
 }
 
 impl<'a> Iterator for ReverseScanIterator<'a> {
@@ -71,7 +73,7 @@ impl<'a> Iterator for ReverseScanIterator<'a> {
 
         let row = DBRow {
             key: key.into(),
-            value: if self.sgx_enable {
+            value: if self.sgx_enable && !self.skip_sgx_seal {
                 unseal_data(self.iter.value().unwrap().to_vec())
             }else {
                 self.iter.value().unwrap().into()
@@ -88,6 +90,7 @@ impl<'a> Iterator for ReverseScanIterator<'a> {
 pub struct DB {
     db: rocksdb::DB,
     pub sgx_enable: bool,
+    pub skip_sgx_seal: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -101,6 +104,7 @@ impl DB {
         let db = DB {
             db: open_raw_db(path),
             sgx_enable: config.sgx_enable,
+            skip_sgx_seal: config.skip_sgx_seal,
         };
         db.verify_compatibility(config);
         db
@@ -122,16 +126,17 @@ impl DB {
         self.db.raw_iterator()
     }
 
-    pub fn iter_scan(&self, prefix: &[u8], sgx_enable: bool) -> ScanIterator {
+    pub fn iter_scan(&self, prefix: &[u8]) -> ScanIterator {
         ScanIterator {
             prefix: prefix.to_vec(),
             iter: self.db.prefix_iterator(prefix),
             done: false,
-            sgx_enable,
+            sgx_enable: self.sgx_enable,
+            skip_sgx_seal: self.skip_sgx_seal,
         }
     }
 
-    pub fn iter_scan_from(&self, prefix: &[u8], start_at: &[u8], sgx_enable: bool) -> ScanIterator {
+    pub fn iter_scan_from(&self, prefix: &[u8], start_at: &[u8]) -> ScanIterator {
         let iter = self.db.iterator(rocksdb::IteratorMode::From(
             start_at,
             rocksdb::Direction::Forward,
@@ -140,11 +145,12 @@ impl DB {
             prefix: prefix.to_vec(),
             iter,
             done: false,
-            sgx_enable,
+            sgx_enable:self.sgx_enable,
+            skip_sgx_seal: self.skip_sgx_seal,
         }
     }
 
-    pub fn iter_scan_reverse(&self, prefix: &[u8], prefix_max: &[u8], sgx_enable: bool) -> ReverseScanIterator {
+    pub fn iter_scan_reverse(&self, prefix: &[u8], prefix_max: &[u8]) -> ReverseScanIterator {
         let mut iter = self.db.raw_iterator();
         iter.seek_for_prev(prefix_max);
 
@@ -152,7 +158,8 @@ impl DB {
             prefix: prefix.to_vec(),
             iter,
             done: false,
-            sgx_enable,
+            sgx_enable: self.sgx_enable,
+            skip_sgx_seal: self.skip_sgx_seal
         }
     }
 
@@ -168,7 +175,7 @@ impl DB {
         for row in rows {
             batch.put(
                 &row.key,
-                if self.sgx_enable { seal_data(row.value) }else { row.value }
+                if self.sgx_enable && !self.skip_sgx_seal { seal_data(row.value) }else { row.value }
             );
         }
         let do_flush = match flush {
@@ -186,7 +193,7 @@ impl DB {
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
-        self.db.put(key, if self.sgx_enable{seal_data(value.to_vec())}else { value.to_vec() }).unwrap();
+        self.db.put(key, if self.sgx_enable && !self.skip_sgx_seal {seal_data(value.to_vec())}else { value.to_vec() }).unwrap();
     }
 
     pub fn put_sync(&self, key: &[u8], value: &[u8]) {
@@ -195,14 +202,14 @@ impl DB {
         self.db
             .put_opt(
                 key,
-                if self.sgx_enable{seal_data(value.to_vec())}else { value.to_vec() },
+                if self.sgx_enable && !self.skip_sgx_seal {seal_data(value.to_vec())}else { value.to_vec() },
                 &opts
             )
             .unwrap();
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Bytes> {
-        self.db.get(key).unwrap().map(|v| if self.sgx_enable{unseal_data(v)}else { v.to_vec() })
+        self.db.get(key).unwrap().map(|v| if self.sgx_enable &&!self.skip_sgx_seal {unseal_data(v)}else { v.to_vec() })
     }
 
     fn verify_compatibility(&self, config: &Config) {
