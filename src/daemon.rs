@@ -23,19 +23,20 @@ use crate::util::{parse_aux_block, HeaderList};
 use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
+use crate::errors;
 
 use crate::errors::*;
 
 fn parse_hash<T>(value: &Value) -> Result<T>
-where
-    T: FromHex,
+    where
+        T: FromHex,
 {
     T::from_hex(
         value
             .as_str()
             .chain_err(|| format!("non-string value: {}", value))?,
     )
-    .chain_err(|| format!("non-hex value: {}", value))
+        .chain_err(|| format!("non-hex value: {}", value))
 }
 
 fn header_from_value(value: Value) -> Result<BlockHeader> {
@@ -519,7 +520,7 @@ impl Daemon {
         for chunk in &chunks {
             let reqs = chunk.collect();
             let mut replies = if spv {
-                self.send_req(&reqs)?
+                self.send_req(&reqs).map_err(|e| ErrorKind::SgxError(e.to_string()))?
             } else {
                 self.call_jsonrpc(method, &reqs)?
             };
@@ -566,6 +567,10 @@ impl Daemon {
                     self.signal.wait(Duration::from_secs(3), false)?;
                     let mut conn = self.conn.lock().unwrap();
                     *conn = conn.reconnect()?;
+                    continue;
+                }
+                Err(Error(ErrorKind::SgxError(msg), _)) => {
+                    warn!("Some thing wrong with sgx server: {msg}");
                     continue;
                 }
                 result => return result,
@@ -909,7 +914,7 @@ mod test {
             signal,
             false,
         )
-        .unwrap();
+            .unwrap();
         conn
     }
 
