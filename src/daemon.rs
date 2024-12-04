@@ -624,16 +624,19 @@ impl Daemon {
 
     pub fn getblockheader(&self, blockhash: &BlockHash) -> Result<BlockHeader> {
         #[cfg(not(feature = "liquid"))]
-        if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
-            header_from_value_aux(self.request(
-                "getblockheader",
-                json!([blockhash.to_hex(), /*verbose=*/ false]),
-            )?)
-        } else {
-            header_from_value(self.request(
-                "getblockheader",
-                json!([blockhash.to_hex(), /*verbose=*/ false]),
-            )?)
+        match self.network {
+            Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest=> {
+                header_from_value_aux(self.request(
+                    "getblockheader",
+                    json!([blockhash.to_hex(), /*verbose=*/ false]),
+                )?)
+            }
+            _ => {
+                header_from_value(self.request(
+                    "getblockheader",
+                    json!([blockhash.to_hex(), /*verbose=*/ false]),
+                )?)
+            }
         }
 
         #[cfg(feature = "liquid")]
@@ -885,7 +888,7 @@ impl Daemon {
 #[cfg(test)]
 mod test {
     use crate::config::StaticCookie;
-    use crate::daemon::{block_from_value, parse_jsonrpc_reply, Connection};
+    use crate::daemon::{block_from_value, parse_jsonrpc_reply, Connection, header_from_value_aux};
     use crate::signal::Waiter;
     use bitcoin::hashes::hex::ToHex;
     use bitcoin::{Address, BlockHash, Network, ScriptHash};
@@ -976,5 +979,30 @@ mod test {
         });
 
         println!("{response}")
+    }
+
+    #[test]
+    fn test_header_from_value_aux_doge() {
+        let header_hex = json!(
+            "04016200cbac034138011652ca6de23d12946edc948e1caf24fd9ccbb5a0a983d2d7c7c1c42c5a4dab8b2e7a1c0d05bd6d892e1fdbb620e16267a4e89310c28770ede49768034f67114a061e0000000001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff5b0310b33529303043796265724c65617020496e63303000000000b9596e8da54849c70000000123000000000000002cfabe6d6d9d4f28eb346bb1c7f1ebe985949264002b7a60c7692864ed9a49dda2594b6b0b0400000042fedb44ffffffff02bc6da012000000001600145755e14e56b05fedd745a51c2de544d3457f18510000000000000000266a24aa21a9edaf0ee89df2961aad6f7d24ec621a5a3111d9d9286c62b4a341210b8da54e044e000000008ea9900103ec747f61f8fd0cb190391fe50dee9565ef5da792e590481276998e0271089c6cb7f699b3d9a1d7fc164c1124405aa605c88f016613c44834d87f829e673791ecaf7ea276476a566440aee382ef500af4d54b7e86ad19095a075624e200000000020000000000000000000000000000000000000000000000000000000000000000d550c8760ad2c91a2ad922e37fe3738e6faeacd6485d60f1db315a5d8583f5c60200000000000020807892a1deb416035ae31f96fe45b71c5e9ff44e29b7af97cf42845500eb0769d0d6f8a3bf6ca88c98e44f6dd39ea4149abeadb586a65fcc94af1875b9f3a1fe63034f67ffff001c1a2c2978"
+        );
+        assert!(header_from_value_aux(header_hex.clone()).is_ok());
+
+        let block_hash = json!("178ff10d5a401e4cb7db773ad58df50b7d1f469e4f9873400cf4855d18c907bb");
+        let mut conn = new_conn();
+        let req = json!({"method": "getblockheader", "params": json!([block_hash, false]), "id": 1})
+            .to_string();
+        conn.send(&req).unwrap();
+        let response = conn.recv().unwrap();
+        let mut response_value: Value = from_str(&response).unwrap();
+
+        let value = match parse_jsonrpc_reply(response_value.take(), "method", 1) {
+            Ok(block) => block,
+            Err(err) => {
+                panic!("{}", err)
+            }
+        };
+
+        assert!(header_from_value_aux(value).is_ok())
     }
 }
