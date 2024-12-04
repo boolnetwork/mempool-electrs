@@ -336,7 +336,10 @@ impl Indexer {
 
         let start = Instant::now();
         crate::reg::add_blocks(self, &daemon, to_add)?;
-        debug!("add_blocks cost :{:?}", Instant::now().duration_since(start));
+        debug!(
+            "add_blocks cost :{:?}",
+            Instant::now().duration_since(start)
+        );
 
         self.start_auto_compactions(&self.store.txstore_db);
 
@@ -407,7 +410,7 @@ impl Indexer {
         let rows = {
             let _timer = self.start_timer("add_process");
             // sgx_add_blocks(Arc::new(blocks.to_vec()), Arc::new(self.iconfig.clone()))
-            add_blocks(blocks,&self.iconfig)
+            add_blocks(blocks, &self.iconfig)
         };
         {
             let _timer = self.start_timer("add_write");
@@ -457,7 +460,10 @@ impl Indexer {
             let _timer = self.start_timer("index_lookup");
             sgx_lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
         };
-        trace!("sgx_lookup_txos cost: {:?}", Instant::now().duration_since(start));
+        trace!(
+            "sgx_lookup_txos cost: {:?}",
+            Instant::now().duration_since(start)
+        );
 
         let rows = {
             let _timer = self.start_timer("index_process");
@@ -473,11 +479,17 @@ impl Indexer {
                     panic!("cannot index block {} (missing from store)", blockhash);
                 }
             }
-            trace!("check added_blockhashes cost: {:?}", Instant::now().duration_since(start));
+            trace!(
+                "check added_blockhashes cost: {:?}",
+                Instant::now().duration_since(start)
+            );
 
             start = Instant::now();
             let rows = index_blocks(blocks, &previous_txos_map, &self.iconfig);
-            trace!("index_blocks cost: {:?}", Instant::now().duration_since(start));
+            trace!(
+                "index_blocks cost: {:?}",
+                Instant::now().duration_since(start)
+            );
             rows
         };
         self.store.history_db.write(rows, self.flush);
@@ -1253,11 +1265,15 @@ impl ChainQuery {
         lookup_txos(&self.store.txstore_db, outpoints, false)
     }
 
-    pub fn lookup_avail_txos(&self, outpoints: &BTreeSet<OutPoint>, sgx_enable: bool) -> HashMap<OutPoint, TxOut> {
+    pub fn lookup_avail_txos(
+        &self,
+        outpoints: &BTreeSet<OutPoint>,
+        sgx_enable: bool,
+    ) -> HashMap<OutPoint, TxOut> {
         let _timer = self.start_timer("lookup_available_txos");
         if sgx_enable {
             sgx_lookup_txos(&self.store.txstore_db, outpoints, true)
-        }else {
+        } else {
             lookup_txos(&self.store.txstore_db, outpoints, true)
         }
     }
@@ -2276,14 +2292,30 @@ fn test_iter_and_pariter() {
     let a: Vec<_> = (0..100_000_000).collect();
 
     let start = Instant::now();
-    a.par_iter().map(|x| {
-        x * 2
-    }).for_each(drop);
-    println!("par_iter duration: {:?}", Instant::now().duration_since(start));
+    a.par_iter().map(|x| x * 2).for_each(drop);
+    println!(
+        "par_iter duration: {:?}",
+        Instant::now().duration_since(start)
+    );
 
     let start = Instant::now();
-    a.iter().map(|x| {
-        x * 2
-    }).for_each(drop);
+    a.iter().map(|x| x * 2).for_each(drop);
     println!("iter duration: {:?}", Instant::now().duration_since(start));
+}
+
+#[test]
+fn test_doge_block() {
+    use dogecoin::hashes::hex::FromHex;
+    use bitcoin::hashes::hex::ToHex;
+    let aux_block_s = "040162007c7b6c653fb76957703c28735ad23b595c58107f10dfa67964b682716ecc181e0047270fc9d1c7bbdaa70d2501a4343f5c56c8f311f822d105ca86575be6cb4302374767eb1f1f1c0000000001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff5b031f833529303043796265724c65617020496e633030000000000f40d8fbbe9584940000000201000000000000002cfabe6d6d64cd75456a0a4ecc3748c43ad310f8ae493fac31909aa2fee2b3fda4e4200e4c0400000013b274edffffffff02205fa012000000001600145755e14e56b05fedd745a51c2de544d3457f18510000000000000000266a24aa21a9ed76b8d85e542cf1626b90d6fba072b0051411782ef5200ff63dbed6d3d0934fe900000000a4cd90355b1d85ec4bbc852ef94e20bb366dee1c4ce72d757e28f33f21e6318e015c322c5cd71c5c913420c399866a187994f06a575cf34c314b18f5d107b54ea500000000020000000000000000000000000000000000000000000000000000000000000000cc380b8ad52f4493140853150fe933c9261da7a2ace9674c23ec7da2eb1866720300000000000020068f8a001ed38caa352086272fe2fcef5fd5d198a5bd514fb1fc32858bad874c207681d6582f5747aa9cd5ebe42a8d5e182e6fde85d941692c785e440c8ed6ee09374767f0ff0f1d38487a200101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff06031083660101ffffffff010010a5d4e80000001976a914f7ee4e209e33810a8c3fa86f2967a7ad36bc40c688ac00000000";
+    let aux_block_blob = hex::decode(aux_block_s).unwrap();
+    let bblock = crate::util::parse_aux_block(aux_block_blob.to_vec()).unwrap();
+    println!("{:?}", bblock);
+    let dblock = dogecoin::consensus::deserialize::<dogecoin::Block>(&aux_block_blob).unwrap();
+    assert_eq!(bblock.txdata[0].output[0].script_pubkey.as_bytes(), dblock.txdata[0].output[0].script_pubkey.as_bytes());
+    assert_eq!(bblock.txdata[0].output[0].script_pubkey.to_string(), dblock.txdata[0].output[0].script_pubkey.to_string());
+    assert_eq!(bblock.txdata[0].output[0].script_pubkey.to_hex(), dblock.txdata[0].output[0].script_pubkey.to_hex());
+    let dscript = dogecoin::Script::from_hex(&bblock.txdata[0].output[0].script_pubkey.to_hex()).unwrap();
+    println!("{}", dscript.to_address_str(Network::DogecoinTestnet).unwrap());
+    println!("{}", dscript.to_string());
 }

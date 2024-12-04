@@ -13,16 +13,16 @@ use itertools::Itertools;
 use serde_json::{from_str, from_value, Value};
 
 #[cfg(not(feature = "liquid"))]
+use crate::chain::Network::{Dogecoin, DogecoinRegtest, DogecoinTestnet, Fractal, FractalTestnet};
+use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
+use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
+use crate::reg::SPV_METHODS;
+use crate::signal::Waiter;
+use crate::util::{parse_aux_block, HeaderList};
+#[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize};
-#[cfg(not(feature = "liquid"))]
-use crate::chain::Network::{Fractal, FractalTestnet};
-use crate::chain::{Block, BlockHash, BlockHeader, Network, Transaction, Txid};
-use crate::metrics::{HistogramOpts, HistogramVec, Metrics};
-use crate::signal::Waiter;
-use crate::util::HeaderList;
-use crate::reg::SPV_METHODS;
 
 use crate::errors::*;
 
@@ -46,7 +46,7 @@ fn header_from_value(value: Value) -> Result<BlockHeader> {
     deserialize(&header_bytes).chain_err(|| format!("failed to parse header {}", header_hex))
 }
 
-fn header_from_value_fractal(value: Value) -> Result<BlockHeader> {
+fn header_from_value_aux(value: Value) -> Result<BlockHeader> {
     let header_hex = value
         .as_str()
         .chain_err(|| format!("non-string header: {}", value))?;
@@ -64,11 +64,17 @@ fn block_from_value(value: Value) -> Result<Block> {
     deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
 }
 
-fn fractal_block_from_value(block_hex: Value) -> Result<Block> {
-    let block_hex = block_hex.as_str().chain_err(|| "non-string block")?;
+fn aux_block_from_value(value: Value) -> Result<Block> {
+    let block_hex = value.as_str().chain_err(|| "non-string block")?;
     let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
-    deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
+    parse_aux_block(block_bytes)
 }
+
+// fn fractal_block_from_value(block_hex: Value) -> Result<Block> {
+//     let block_hex = block_hex.as_str().chain_err(|| "non-string block")?;
+//     let block_bytes = hex::decode(block_hex).chain_err(|| "non-hex block")?;
+//     deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))
+// }
 
 fn tx_from_value(value: Value) -> Result<Transaction> {
     let tx_hex = value.as_str().chain_err(|| "non-string tx")?;
@@ -460,7 +466,7 @@ impl Daemon {
         if let Some(obj) = request.as_object() {
             if let Some(method) = obj.get("method") {
                 if method.to_string().eq("getblock") {
-                    debug!("{}",request)
+                    debug!("{}", request)
                 }
             }
         }
@@ -497,7 +503,13 @@ impl Daemon {
         let chunks = params_list
             .iter()
             .map(|params| json!({"method": method, "params": params, "id": id}))
-            .chunks(|| -> usize { if spv { 10_000 } else { 50_000 } }()); // Max Amount of batched requests
+            .chunks({
+                if spv {
+                    10_000
+                } else {
+                    50_000
+                }
+            }); // Max Amount of batched requests
         let mut results = vec![];
         let total_requests = params_list.len();
         let mut failed_requests: u64 = 0;
@@ -507,7 +519,7 @@ impl Daemon {
         for chunk in &chunks {
             let reqs = chunk.collect();
             let mut replies = if spv {
-                self.send_req(&reqs)?
+                self.send_req(&reqs).map_err(|e| ErrorKind::SgxError(e.to_string()))?
             } else {
                 self.call_jsonrpc(method, &reqs)?
             };
@@ -556,6 +568,10 @@ impl Daemon {
                     *conn = conn.reconnect()?;
                     continue;
                 }
+                Err(Error(ErrorKind::SgxError(msg), _)) => {
+                    warn!("Some thing wrong with sgx server: {msg}");
+                    continue;
+                }
                 result => return result,
             }
         }
@@ -563,15 +579,7 @@ impl Daemon {
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
         let spv = if self.sgx_enable {
-            // debug!("request method {}", method);
-            // if let Some(values) = crate::reg::filter_requests(method) {
-            //     return Ok(values);
-            // }
-            if SPV_METHODS.contains(&method) {
-                true
-            } else {
-                false
-            }
+            SPV_METHODS.contains(&method)
         } else {
             false
         };
@@ -583,11 +591,7 @@ impl Daemon {
 
     fn requests(&self, method: &str, params_list: &[Value]) -> Result<Vec<Value>> {
         let spv = if self.sgx_enable {
-            if SPV_METHODS.contains(&method) {
-                true
-            } else {
-                false
-            }
+            SPV_METHODS.contains(&method)
         } else {
             false
         };
@@ -603,7 +607,10 @@ impl Daemon {
 
     fn getmempoolinfo(&self) -> Result<MempoolInfo> {
         let info: Value = self.request("getmempoolinfo", json!([]))?;
-        from_value(info).chain_err(|| "invalid mempool info")
+        match self.network {
+            Dogecoin | DogecoinTestnet | DogecoinRegtest => Ok(MempoolInfo { loaded: true }),
+            _ => from_value(info).chain_err(|| "invalid mempool info"),
+        }
     }
 
     fn getnetworkinfo(&self) -> Result<NetworkInfo> {
@@ -617,16 +624,19 @@ impl Daemon {
 
     pub fn getblockheader(&self, blockhash: &BlockHash) -> Result<BlockHeader> {
         #[cfg(not(feature = "liquid"))]
-        if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
-            header_from_value_fractal(self.request(
-                "getblockheader",
-                json!([blockhash.to_hex(), /*verbose=*/ false]),
-            )?)
-        } else {
-            header_from_value(self.request(
-                "getblockheader",
-                json!([blockhash.to_hex(), /*verbose=*/ false]),
-            )?)
+        match self.network {
+            Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest=> {
+                header_from_value_aux(self.request(
+                    "getblockheader",
+                    json!([blockhash.to_hex(), /*verbose=*/ false]),
+                )?)
+            }
+            _ => {
+                header_from_value(self.request(
+                    "getblockheader",
+                    json!([blockhash.to_hex(), /*verbose=*/ false]),
+                )?)
+            }
         }
 
         #[cfg(feature = "liquid")]
@@ -646,11 +656,15 @@ impl Daemon {
         let mut result = vec![];
         for h in self.requests("getblockheader", &params_list)? {
             #[cfg(not(feature = "liquid"))]
-            if self.network.eq(&Fractal) || self.network.eq(&FractalTestnet) {
-                result.push(header_from_value_fractal(h)?);
-            } else {
-                result.push(header_from_value(h)?);
+            match self.network {
+                Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => {
+                    result.push(header_from_value_aux(h)?);
+                }
+                _ => {
+                    result.push(header_from_value(h)?);
+                }
             }
+
             #[cfg(feature = "liquid")]
             result.push(header_from_value(h)?);
         }
@@ -676,40 +690,32 @@ impl Daemon {
             .collect();
         let values = self.requests("getblock", &params_list)?;
         let mut blocks = vec![];
-        for value in values {
-            blocks.push(block_from_value(value)?);
+        match self.network {
+            Network::Bitcoin
+            | Network::Testnet
+            | Network::Testnet4
+            | Network::Regtest
+            | Network::Signet => {
+                for value in values {
+                    blocks.push(block_from_value(value)?);
+                }
+            }
+            _ => unreachable!(),
         }
+
         Ok(blocks)
     }
 
-    pub fn get_fractal_bocks(&self, blockhashes: &[BlockHash]) -> Result<Vec<Block>> {
+    pub fn get_blocks_has_aux(&self, blockhashes: &[BlockHash]) -> Result<Vec<Block>> {
         let params_list: Vec<Value> = blockhashes
             .iter()
             .map(|hash| json!([hash.to_hex(), /*verbose=*/ false]))
             .collect();
 
-        let mut block_values = self.requests("getblock", &params_list)?;
-        let block_header_values = self.requests("getblockheader", &params_list)?;
-        assert_eq!(block_values.len(), block_header_values.len());
-        for (idx, block_header_value) in block_header_values.iter().enumerate() {
-            let header_hex = block_header_value
-                .as_str()
-                .chain_err(|| "non-string block header")?;
-            let header_len = 80 * 2;
-            if header_hex.len() > header_len {
-                let remaining_header_data = &header_hex[header_len..];
-                if let Some(block_value) = block_values.get_mut(idx) {
-                    let block_hex = block_value.as_str().chain_err(|| "non-string block")?;
-                    assert_eq!(block_hex[..header_len], header_hex[..header_len]);
-                    let updated_block_hex = block_hex.replace(remaining_header_data, "");
-                    *block_value = Value::String(updated_block_hex);
-                }
-            }
-        }
-
+        let block_values = self.requests("getblock", &params_list)?;
         let mut blocks = vec![];
         for value in block_values {
-            blocks.push(fractal_block_from_value(value)?);
+            blocks.push(aux_block_from_value(value)?);
         }
         Ok(blocks)
     }
@@ -881,17 +887,17 @@ impl Daemon {
 
 #[cfg(test)]
 mod test {
+    use crate::config::StaticCookie;
+    use crate::daemon::{block_from_value, parse_jsonrpc_reply, Connection, header_from_value_aux};
+    use crate::signal::Waiter;
+    use bitcoin::hashes::hex::ToHex;
+    use bitcoin::{Address, BlockHash, Network, ScriptHash};
+    use reqwest::blocking::Client;
+    use serde_json::{from_str, Value};
     use std::env::var;
     use std::net::ToSocketAddrs;
     use std::str::FromStr;
     use std::sync::Arc;
-    use bitcoin::{Address, BlockHash, Network, ScriptHash};
-    use crate::config::StaticCookie;
-    use crate::daemon::{block_from_value, Connection, parse_jsonrpc_reply};
-    use crate::signal::Waiter;
-    use bitcoin::hashes::hex::ToHex;
-    use reqwest::blocking::Client;
-    use serde_json::{from_str, Value};
 
     fn new_conn() -> Connection {
         let bitcoind_url = var("BITCOIND").unwrap();
@@ -904,22 +910,24 @@ mod test {
                 .collect::<Vec<_>>()
                 .pop()
                 .unwrap(),
-            Arc::new(
-                StaticCookie {
-                    value: cookie.as_bytes().to_vec()
-                }
-            ),
+            Arc::new(StaticCookie {
+                value: cookie.as_bytes().to_vec(),
+            }),
             signal,
             false,
-        ).unwrap();
+        )
+            .unwrap();
         conn
     }
 
     #[test]
     fn test_get_address_balance() {
         let mut conn = new_conn();
-        let block_hash = BlockHash::from_str("000000000c31272b94df9abb43f11f9758f18c4084d2799b60f162c68db88360").unwrap();
-        let req = json!({"method": "getblock", "params": json!([block_hash.to_hex(), 0]), "id": 1}).to_string();
+        let block_hash =
+            BlockHash::from_str("000000000c31272b94df9abb43f11f9758f18c4084d2799b60f162c68db88360")
+                .unwrap();
+        let req = json!({"method": "getblock", "params": json!([block_hash.to_hex(), 0]), "id": 1})
+            .to_string();
         conn.send(&req).unwrap();
         let response = conn.recv().unwrap();
         let mut response_value: Value = from_str(&response).unwrap();
@@ -944,7 +952,7 @@ mod test {
                 if let Some(addr) = Address::from_script(&out.script_pubkey, Network::Testnet) {
                     address_list.push((AddressType::Normal, addr.to_string()))
                 } else {
-                    if let Ok(script_hash) = ScriptHash::from_str(&out.script_pubkey.to_hex()){
+                    if let Ok(script_hash) = ScriptHash::from_str(&out.script_pubkey.to_hex()) {
                         address_list.push((AddressType::PubKey, script_hash.to_string()))
                     }
                 }
@@ -952,7 +960,7 @@ mod test {
                     break 'outer;
                 }
             }
-        };
+        }
         let electrs_url = var("ELECTRS").unwrap();
         address_list.into_iter().for_each(|address| {
             let url = match address.0 {
@@ -965,16 +973,36 @@ mod test {
             };
 
             let client = Client::new();
-            let response = client
-                .get(url)
-                .send()
-                .unwrap()
-                .text()
-                .unwrap();
+            let response = client.get(url).send().unwrap().text().unwrap();
             println!("{response}");
             // std::thread::sleep(Duration::from_millis(500));
         });
 
         println!("{response}")
+    }
+
+    #[test]
+    fn test_header_from_value_aux_doge() {
+        let header_hex = json!(
+            "04016200cbac034138011652ca6de23d12946edc948e1caf24fd9ccbb5a0a983d2d7c7c1c42c5a4dab8b2e7a1c0d05bd6d892e1fdbb620e16267a4e89310c28770ede49768034f67114a061e0000000001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff5b0310b33529303043796265724c65617020496e63303000000000b9596e8da54849c70000000123000000000000002cfabe6d6d9d4f28eb346bb1c7f1ebe985949264002b7a60c7692864ed9a49dda2594b6b0b0400000042fedb44ffffffff02bc6da012000000001600145755e14e56b05fedd745a51c2de544d3457f18510000000000000000266a24aa21a9edaf0ee89df2961aad6f7d24ec621a5a3111d9d9286c62b4a341210b8da54e044e000000008ea9900103ec747f61f8fd0cb190391fe50dee9565ef5da792e590481276998e0271089c6cb7f699b3d9a1d7fc164c1124405aa605c88f016613c44834d87f829e673791ecaf7ea276476a566440aee382ef500af4d54b7e86ad19095a075624e200000000020000000000000000000000000000000000000000000000000000000000000000d550c8760ad2c91a2ad922e37fe3738e6faeacd6485d60f1db315a5d8583f5c60200000000000020807892a1deb416035ae31f96fe45b71c5e9ff44e29b7af97cf42845500eb0769d0d6f8a3bf6ca88c98e44f6dd39ea4149abeadb586a65fcc94af1875b9f3a1fe63034f67ffff001c1a2c2978"
+        );
+        assert!(header_from_value_aux(header_hex.clone()).is_ok());
+
+        let block_hash = json!("178ff10d5a401e4cb7db773ad58df50b7d1f469e4f9873400cf4855d18c907bb");
+        let mut conn = new_conn();
+        let req = json!({"method": "getblockheader", "params": json!([block_hash, false]), "id": 1})
+            .to_string();
+        conn.send(&req).unwrap();
+        let response = conn.recv().unwrap();
+        let mut response_value: Value = from_str(&response).unwrap();
+
+        let value = match parse_jsonrpc_reply(response_value.take(), "method", 1) {
+            Ok(block) => block,
+            Err(err) => {
+                panic!("{}", err)
+            }
+        };
+
+        assert!(header_from_value_aux(value).is_ok())
     }
 }

@@ -3,18 +3,18 @@ use bitcoin::consensus::encode::{deserialize, Decodable};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, Decodable};
 
-use byteorder::{BigEndian, ReadBytesExt};
+#[cfg(not(feature = "liquid"))]
+use crate::chain::Network::{Fractal, FractalTestnet};
+use crate::chain::{Block, BlockHash, Network};
+use crate::daemon::Daemon;
+use crate::errors::*;
+use crate::util::{parse_aux_block, spawn_thread, HeaderEntry, SyncChannel};
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
+use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::thread;
-use std::fs;
-#[cfg(not(feature = "liquid"))]
-use crate::chain::Network::{Fractal, FractalTestnet};
-use crate::chain::{Block, BlockHash};
-use crate::daemon::Daemon;
-use crate::errors::*;
-use crate::util::{spawn_thread, HeaderEntry, SyncChannel};
 
 #[derive(Clone, Copy, Debug)]
 pub enum FetchFrom {
@@ -83,9 +83,13 @@ fn bitcoind_fetcher(
             for entries in new_headers.chunks(100) {
                 let blockhashes: Vec<BlockHash> = entries.iter().map(|e| *e.hash()).collect();
                 #[cfg(not(feature = "liquid"))]
-                    let blocks = match daemon.network() {
-                    Fractal | FractalTestnet => daemon
-                        .get_fractal_bocks(&blockhashes)
+                let blocks = match daemon.network() {
+                    Fractal
+                    | FractalTestnet
+                    | Network::Dogecoin
+                    | Network::DogecoinTestnet
+                    | Network::DogecoinRegtest => daemon
+                        .get_blocks_has_aux(&blockhashes)
                         .expect("failed to get blocks from bitcoind"),
                     _ => daemon
                         .getblocks(&blockhashes)
@@ -93,7 +97,7 @@ fn bitcoind_fetcher(
                 };
 
                 #[cfg(feature = "liquid")]
-                    let blocks = daemon
+                let blocks = daemon
                     .getblocks(&blockhashes)
                     .expect("failed to get blocks from bitcoind");
 
@@ -130,13 +134,23 @@ fn blkfiles_fetcher(
         new_headers.into_iter().map(|h| (*h.hash(), h)).collect();
 
     #[cfg(not(feature = "liquid"))]
-        let parser = if daemon.network().eq(&Fractal) || daemon.network().eq(&FractalTestnet) {
-        blkfiles_parser_fractal(blkfiles_reader(blk_files), magic)
-    } else {
-        blkfiles_parser(blkfiles_reader(blk_files), magic)
+    let parser = match daemon.network() {
+        Network::Bitcoin
+        | Network::Testnet
+        | Network::Testnet4
+        | Network::Regtest
+        | Network::Signet => blkfiles_parser(blkfiles_reader(blk_files), magic),
+        Fractal
+        | FractalTestnet
+        | Network::Dogecoin
+        | Network::DogecoinTestnet
+        | Network::DogecoinRegtest => {
+            blkfiles_parser_has_aux(blkfiles_reader(blk_files), magic, daemon.network())
+        }
     };
+
     #[cfg(feature = "liquid")]
-        let parser = blkfiles_parser(blkfiles_reader(blk_files), magic);
+    let parser = blkfiles_parser(blkfiles_reader(blk_files), magic);
 
     Ok(Fetcher::from(
         chan.into_receiver(),
@@ -207,7 +221,11 @@ fn blkfiles_parser(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<SizedBloc
     )
 }
 
-fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<SizedBlock>> {
+fn blkfiles_parser_has_aux(
+    blobs: Fetcher<Vec<u8>>,
+    magic: u32,
+    network: Network,
+) -> Fetcher<Vec<SizedBlock>> {
     let chan = SyncChannel::new(1);
     let sender = chan.sender();
 
@@ -216,8 +234,8 @@ fn blkfiles_parser_fractal(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<S
         spawn_thread("blkfiles_parser", move || {
             blobs.map(|blob| {
                 trace!("parsing {} bytes", blob.len());
-                let blocks =
-                    parse_blocks_fractal(blob, magic).expect("failed to parse blk*.dat file");
+                let blocks = parse_blocks_has_aux(blob, magic, network)
+                    .expect("failed to parse blk*.dat file");
                 sender
                     .send(blocks)
                     .expect("failed to send blocks from blk*.dat file");
@@ -266,6 +284,56 @@ pub fn sgx_parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
     let data: Vec<SizedBlock> = slices
         .into_par_iter()
         .map(|(slice, size)| (deserialize(slice).expect("failed to parse Block"), size))
+        .collect();
+
+    Ok(data)
+}
+
+pub fn sgx_parse_aux_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
+    let mut cursor = Cursor::new(&blob);
+    let mut slices = vec![];
+    let max_pos = blob.len() as u64;
+
+    while cursor.position() < max_pos {
+        let offset = cursor.position();
+        match u32::consensus_decode(&mut cursor) {
+            Ok(value) => {
+                if magic != value {
+                    cursor.set_position(offset + 1);
+                    continue;
+                }
+            }
+            Err(_) => break, // EOF
+        };
+        let block_size = u32::consensus_decode(&mut cursor).chain_err(|| "no block size")?;
+        let start = cursor.position();
+        let end = start + block_size as u64;
+
+        // If Core's WriteBlockToDisk ftell fails, only the magic bytes and size will be written
+        // and the block body won't be written to the blk*.dat file.
+        // Since the first 4 bytes should contain the block's version, we can skip such blocks
+        // by peeking the cursor (and skipping previous `magic` and `block_size`).
+        match u32::consensus_decode(&mut cursor) {
+            Ok(value) => {
+                if magic == value {
+                    cursor.set_position(start);
+                    continue;
+                }
+            }
+            Err(_) => break, // EOF
+        }
+        slices.push((&blob[start as usize..end as usize], block_size));
+        cursor.set_position(end);
+    }
+
+    let data: Vec<SizedBlock> = slices
+        .into_par_iter()
+        .map(|(slice, size)| {
+            (
+                parse_aux_block(slice.to_vec()).expect("failed to parse Block"),
+                size,
+            )
+        })
         .collect();
 
     Ok(data)
@@ -321,14 +389,20 @@ pub(crate) fn parse_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>>
     }))
 }
 
-fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
+fn parse_blocks_has_aux(blob: Vec<u8>, magic: u32, network: Network) -> Result<Vec<SizedBlock>> {
     let mut cursor = Cursor::new(&blob);
     let mut slices = vec![];
     let max_pos = blob.len() as u64;
 
     while cursor.position() < max_pos {
         let offset = cursor.position();
-        match ReadBytesExt::read_u32::<BigEndian>(&mut cursor) {
+        match match network {
+            Fractal | FractalTestnet => ReadBytesExt::read_u32::<BigEndian>(&mut cursor),
+            Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => {
+                ReadBytesExt::read_u32::<LittleEndian>(&mut cursor)
+            }
+            _ => unreachable!(),
+        } {
             Ok(value) => {
                 if magic != value {
                     cursor.set_position(offset + 1);
@@ -339,11 +413,21 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         }
 
         let block_size = u32::consensus_decode(&mut cursor).chain_err(|| "no block size")?;
-        let auxpow_size = u32::consensus_decode(&mut cursor).chain_err(|| "no auxpow size")?;
-        let start = cursor.position();
-        let header_end = start + 80;
-        let ntx_start = header_end + auxpow_size as u64;
-        let end = start + block_size as u64;
+        let (range, start, end) = match network {
+            Fractal | FractalTestnet => {
+                let _auxpow_size =
+                    u32::consensus_decode(&mut cursor).chain_err(|| "no auxpow size")?;
+                let start = cursor.position();
+                let end = start + block_size as u64;
+                (start as usize..end as usize, start, end)
+            }
+            Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => {
+                let start = cursor.position();
+                let end = start + block_size as u64;
+                (start as usize..end as usize, start, end)
+            }
+            _ => unreachable!(),
+        };
 
         // If Core's WriteBlockToDisk ftell fails, only the magic bytes and size will be written
         // and the block body won't be written to the blk*.dat file.
@@ -360,8 +444,9 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         }
 
         let mut block_data = vec![];
-        block_data.extend_from_slice(&blob[start as usize..header_end as usize]);
-        block_data.extend_from_slice(&blob[ntx_start as usize..end as usize]);
+        // for range in ranges {
+            block_data.extend_from_slice(&blob[range]);
+        // }
         slices.push((block_data, block_size));
         cursor.set_position(end);
     }
@@ -372,19 +457,32 @@ fn parse_blocks_fractal(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>> {
         .build()
         .unwrap();
 
-    Ok(pool.install(|| {
-        slices
-            .into_par_iter()
-            .map(|(slice, size)| (deserialize(&slice).expect("failed to parse Block"), size))
-            .collect()
-    }))
+    match network {
+        Fractal | FractalTestnet => Ok(pool.install(|| {
+            slices
+                .into_par_iter()
+                .map(|(slice, size)| (parse_aux_block(slice).expect("failed to parse Block"), size))
+                .collect()
+        })),
+        Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => Ok(pool
+            .install(|| {
+                slices
+                    .into_par_iter()
+                    .map(|(slice, size)| {
+                        (parse_aux_block(slice).expect("failed to parse Block"), size)
+                    })
+                    .collect()
+            })),
+        _ => unreachable!(),
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::new_index::fetch::parse_blocks_fractal;
+    use crate::chain::Network;
+    use crate::new_index::fetch::parse_blocks_has_aux;
     use bitcoin::consensus::{deserialize, Decodable};
-    use bitcoin::{BlockHeader};
+    use bitcoin::BlockHeader;
     use byteorder::{BigEndian, ReadBytesExt};
     use std::fs;
     use std::io::{self, Cursor};
@@ -411,12 +509,14 @@ mod test {
 
     #[test]
     fn test_parse_blk() {
-        let blob =
-            fs::read("../fractald-release/fractald-docker/data/blocks/blk00000.dat").unwrap();
-        println!("blob len: {}", blob.len());
-        // parse_blocks_magic(blob, 0xE8ADA3C8).unwrap();
-        let result = parse_blocks_fractal(blob, 0xe8ada3c8).unwrap();
-        println!("{:?}", result);
+        let doge_testnet_blob = fs::read("test_data/doge_testnet.dat").unwrap();
+        assert!(parse_blocks_has_aux(doge_testnet_blob, 0xDCB7C1FC, Network::DogecoinTestnet).is_ok());
+        let doge_main_blob = fs::read("test_data/dogecoin.dat").unwrap();
+        assert!(parse_blocks_has_aux(doge_main_blob, 0xC0C0C0C0, Network::Dogecoin).is_ok());
+        let fractal_testnet_blob = fs::read("test_data/fractal_testnet.dat").unwrap();
+        assert!(parse_blocks_has_aux(fractal_testnet_blob, 0xE8ADA3C8, Network::FractalTestnet).is_ok());
+        let fractal_main_blob = fs::read("test_data/fractal.dat").unwrap();
+        assert!(parse_blocks_has_aux(fractal_main_blob, 0xD99E94B9, Network::Fractal).is_ok());
     }
 
     #[test]

@@ -22,6 +22,8 @@ pub struct ScanIterator<'a> {
     prefix: Vec<u8>,
     iter: rocksdb::DBIterator<'a>,
     done: bool,
+    sgx_enable: bool,
+    skip_sgx_seal: bool,
 }
 
 impl<'a> Iterator for ScanIterator<'a> {
@@ -38,7 +40,11 @@ impl<'a> Iterator for ScanIterator<'a> {
         }
         Some(DBRow {
             key: key.to_vec(),
-            value: unseal_data(value.to_vec()),
+            value: if self.sgx_enable &&!self.skip_sgx_seal{
+                unseal_data(value.to_vec())
+            }else {
+                value.to_vec()
+            },
         })
     }
 }
@@ -47,6 +53,8 @@ pub struct ReverseScanIterator<'a> {
     prefix: Vec<u8>,
     iter: rocksdb::DBRawIterator<'a>,
     done: bool,
+    sgx_enable: bool,
+    skip_sgx_seal: bool,
 }
 
 impl<'a> Iterator for ReverseScanIterator<'a> {
@@ -65,7 +73,11 @@ impl<'a> Iterator for ReverseScanIterator<'a> {
 
         let row = DBRow {
             key: key.into(),
-            value: unseal_data(self.iter.value().unwrap().to_vec()),
+            value: if self.sgx_enable && !self.skip_sgx_seal {
+                unseal_data(self.iter.value().unwrap().to_vec())
+            }else {
+                self.iter.value().unwrap().into()
+            },
         };
 
         self.iter.prev();
@@ -77,6 +89,8 @@ impl<'a> Iterator for ReverseScanIterator<'a> {
 #[derive(Debug)]
 pub struct DB {
     db: rocksdb::DB,
+    pub sgx_enable: bool,
+    pub skip_sgx_seal: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -89,6 +103,8 @@ impl DB {
     pub fn open(path: &Path, config: &Config) -> DB {
         let db = DB {
             db: open_raw_db(path),
+            sgx_enable: config.sgx_enable,
+            skip_sgx_seal: config.skip_sgx_seal,
         };
         db.verify_compatibility(config);
         db
@@ -115,6 +131,8 @@ impl DB {
             prefix: prefix.to_vec(),
             iter: self.db.prefix_iterator(prefix),
             done: false,
+            sgx_enable: self.sgx_enable,
+            skip_sgx_seal: self.skip_sgx_seal,
         }
     }
 
@@ -127,6 +145,8 @@ impl DB {
             prefix: prefix.to_vec(),
             iter,
             done: false,
+            sgx_enable:self.sgx_enable,
+            skip_sgx_seal: self.skip_sgx_seal,
         }
     }
 
@@ -138,6 +158,8 @@ impl DB {
             prefix: prefix.to_vec(),
             iter,
             done: false,
+            sgx_enable: self.sgx_enable,
+            skip_sgx_seal: self.skip_sgx_seal
         }
     }
 
@@ -151,7 +173,10 @@ impl DB {
         rows.sort_unstable_by(|a, b| a.key.cmp(&b.key));
         let mut batch = rocksdb::WriteBatch::default();
         for row in rows {
-            batch.put(&row.key, seal_data(row.value));
+            batch.put(
+                &row.key,
+                if self.sgx_enable && !self.skip_sgx_seal { seal_data(row.value) }else { row.value }
+            );
         }
         let do_flush = match flush {
             DBFlush::Enable => true,
@@ -168,17 +193,23 @@ impl DB {
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
-        self.db.put(key, seal_data(value.to_vec())).unwrap();
+        self.db.put(key, if self.sgx_enable && !self.skip_sgx_seal {seal_data(value.to_vec())}else { value.to_vec() }).unwrap();
     }
 
     pub fn put_sync(&self, key: &[u8], value: &[u8]) {
         let mut opts = rocksdb::WriteOptions::new();
         opts.set_sync(true);
-        self.db.put_opt(key, seal_data(value.to_vec()), &opts).unwrap();
+        self.db
+            .put_opt(
+                key,
+                if self.sgx_enable && !self.skip_sgx_seal {seal_data(value.to_vec())}else { value.to_vec() },
+                &opts
+            )
+            .unwrap();
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Bytes> {
-        self.db.get(key).unwrap().map(|v| unseal_data(v))
+        self.db.get(key).unwrap().map(|v| if self.sgx_enable &&!self.skip_sgx_seal {unseal_data(v)}else { v.to_vec() })
     }
 
     fn verify_compatibility(&self, config: &Config) {
@@ -195,7 +226,7 @@ impl DB {
         match self.get(b"V") {
             None => self.put(b"V", &compatibility_bytes),
             Some(ref x) if x != &compatibility_bytes => {
-                println!("x={:?} compatibility_bytes={:?}",x,compatibility_bytes);
+                println!("x={:?} compatibility_bytes={:?}", x, compatibility_bytes);
                 panic!("Incompatible database found. Please reindex.")
             }
             Some(_) => (),

@@ -75,7 +75,10 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                     break;
                 }
                 Err(err) => {
-                    if err.to_string().contains("failed to get blocks from bitcoind") {
+                    if err
+                        .to_string()
+                        .contains("failed to get blocks from bitcoind")
+                    {
                         error!("{err}");
                     } else {
                         return Err(err);
@@ -117,7 +120,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     }
 
     #[cfg(feature = "liquid")]
-        let asset_db = config.asset_db_path.as_ref().map(|db_dir| {
+    let asset_db = config.asset_db_path.as_ref().map(|db_dir| {
         let asset_db = Arc::new(RwLock::new(AssetRegistry::new(db_dir.clone())));
         AssetRegistry::spawn_sync(asset_db.clone());
         asset_db
@@ -129,7 +132,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         Arc::clone(&daemon),
         Arc::clone(&config),
         #[cfg(feature = "liquid")]
-            asset_db,
+        asset_db,
     ));
 
     // TODO: configuration for which servers to start
@@ -169,46 +172,11 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         }
 
         // Index new blocks
-        let mut ok = false;
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let current_tip = daemon.getbestblockhash()?;
-            if current_tip != tip {
-                #[cfg(not(feature = "liquid"))]
-                if config.sgx_enable {
-                    match indexer.sgx_update(&daemon) {
-                        Ok(_) => {
-                            ok = true;
-                        }
-                        Err(err) => {
-                            if err.to_string().contains("failed to get blocks from bitcoind") {
-                                warn!("{err}");
-                            } else {
-                                return Err(err);
-                            }
-                        }
-                    }
-                } else {
-                    indexer.update(&daemon)?;
-                    ok = true;
-                }
-
-                #[cfg(feature = "liquid")]
-                match indexer.update(&daemon) {
-                    Ok(_) => {
-                        ok = true;
-                    }
-                    Err(err) => {
-                        return Err(err);
-                    }
-                };
-
-                if ok {
-                    tip = current_tip;
-                    break;
-                }
-            }
-        }
+        let current_tip = daemon.getbestblockhash()?;
+        if current_tip != tip {
+            indexer.update(&daemon)?;
+            tip = current_tip;
+        };
 
         // Update mempool
         if let Err(e) = Mempool::update(&mempool, &daemon) {
@@ -218,7 +186,6 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                 e.display_chain()
             );
         }
-
         // Update subscribed clients
         //electrum_server.notify();
     }
@@ -252,7 +219,7 @@ fn register_to_bool(config: Arc<Config>) -> Result<()> {
                     config.watcher_device_id.clone(),
                     2u16,
                 )
-                    .await;
+                .await;
                 std::thread::park();
             });
         });

@@ -20,6 +20,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Response, Server, StatusCode};
 use prometheus::{HistogramOpts, HistogramVec};
 use tokio::sync::oneshot;
+use dogecoin::network::constants::Network as DNetwork;
 
 use hyperlocal::UnixServerExt;
 use std::{cmp, fs};
@@ -36,10 +37,12 @@ use ordinals::{Artifact, RuneId, Runestone};
 use serde::Serialize;
 use serde_json;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::num::ParseIntError;
 use std::os::unix::fs::FileTypeExt;
 use std::sync::Arc;
 use std::thread;
+use sha2::{Digest, Sha256};
 use url::form_urlencoded;
 
 const ADDRESS_SEARCH_LIMIT: usize = 10;
@@ -49,9 +52,12 @@ const ASSETS_PER_PAGE: usize = 25;
 #[cfg(feature = "liquid")]
 const ASSETS_MAX_PER_PAGE: usize = 100;
 
-const TTL_LONG: u32 = 157_784_630; // ttl for static resources (5 years)
-const TTL_SHORT: u32 = 10; // ttl for volatie resources
-const TTL_MEMPOOL_RECENT: u32 = 5; // ttl for GET /mempool/recent
+const TTL_LONG: u32 = 157_784_630;
+// ttl for static resources (5 years)
+const TTL_SHORT: u32 = 10;
+// ttl for volatie resources
+const TTL_MEMPOOL_RECENT: u32 = 5;
+// ttl for GET /mempool/recent
 const CONF_FINAL: usize = 10; // reorgs deeper than this are considered unlikely
 
 // internal api prefix
@@ -227,7 +233,7 @@ impl TxInValue {
     fn new(txin: &TxIn, prevout: Option<&TxOut>, config: &Config) -> Self {
         let witness = &txin.witness;
         #[cfg(feature = "liquid")]
-        let witness = &witness.script_witness;
+            let witness = &witness.script_witness;
 
         let witness = if !witness.is_empty() {
             Some(witness.iter().map(hex::encode).collect())
@@ -239,10 +245,16 @@ impl TxInValue {
 
         let innerscripts = prevout.map(|prevout| get_innerscripts(txin, prevout));
 
+        let prevout = if let Some(prevout) = prevout {
+            Some(TxOutValue::new(prevout, config))
+        } else {
+            None
+        };
+
         TxInValue {
             txid: txin.previous_output.txid,
             vout: txin.previous_output.vout,
-            prevout: prevout.map(|prevout| TxOutValue::new(prevout, config)),
+            prevout,
             scriptsig_asm: txin.script_sig.to_asm(),
             witness,
 
@@ -307,35 +319,53 @@ struct TxOutValue {
 impl TxOutValue {
     fn new(txout: &TxOut, config: &Config) -> Self {
         #[cfg(not(feature = "liquid"))]
-        let value = txout.value;
+            let value = txout.value;
 
         #[cfg(feature = "liquid")]
-        let value = txout.value.explicit();
+            let value = txout.value.explicit();
         #[cfg(feature = "liquid")]
-        let valuecommitment = match txout.value {
+            let valuecommitment = match txout.value {
             Value::Confidential(..) => Some(hex::encode(encode::serialize(&txout.value))),
             _ => None,
         };
 
         #[cfg(feature = "liquid")]
-        let asset = match txout.asset {
+            let asset = match txout.asset {
             Asset::Explicit(value) => Some(value.to_hex()),
             _ => None,
         };
         #[cfg(feature = "liquid")]
-        let assetcommitment = match txout.asset {
+            let assetcommitment = match txout.asset {
             Asset::Confidential(..) => Some(hex::encode(encode::serialize(&txout.asset))),
             _ => None,
         };
 
         #[cfg(not(feature = "liquid"))]
-        let is_fee = false;
+            let is_fee = false;
         #[cfg(feature = "liquid")]
-        let is_fee = txout.is_fee();
+            let is_fee = txout.is_fee();
 
         let script = &txout.script_pubkey;
         let script_asm = script.to_asm();
-        let script_addr = script.to_address_str(config.network_type);
+        let script_addr = if matches!(config.network_type, Network::Dogecoin | Network::DogecoinRegtest | Network::DogecoinTestnet) {
+            use dogecoin::hashes::hex::FromHex;
+            if !script.is_op_return() {
+                match dogecoin::blockdata::script::Script::from_hex(&script.to_hex()) {
+                    Ok(doge_script) => {
+                        doge_script.to_address_str(config.network_type)
+                    }
+                    Err(err) => {
+                        error!("Failed to convert btc script to doge script: {}, btc scrpt: {:?}", err, script);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            script.to_address_str(config.network_type)
+        };
+
 
         // TODO should the following something to put inside rust-elements lib?
         let script_type = if is_fee {
@@ -365,7 +395,7 @@ impl TxOutValue {
         };
 
         #[cfg(feature = "liquid")]
-        let pegout = PegoutValue::from_txout(txout, config.network_type, config.parent_network);
+            let pegout = PegoutValue::from_txout(txout, config.network_type, config.parent_network);
 
         TxOutValue {
             scriptpubkey: script.clone(),
@@ -384,11 +414,13 @@ impl TxOutValue {
         }
     }
 }
+
 fn is_v1_p2tr(script: &Script) -> bool {
     script.len() == 34
         && script[0] == opcodes::all::OP_PUSHNUM_1.into_u8()
         && script[1] == opcodes::all::OP_PUSHBYTES_32.into_u8()
 }
+
 fn is_bare_multisig(script: &Script) -> bool {
     let len = script.len();
     // 1-of-1 multisig is 37 bytes
@@ -447,6 +479,7 @@ struct UtxoValue {
     #[serde(skip_serializing_if = "Vec::is_empty", with = "crate::util::serde_hex")]
     range_proof: Vec<u8>,
 }
+
 impl From<Utxo> for UtxoValue {
     fn from(utxo: Utxo) -> Self {
         UtxoValue {
@@ -508,6 +541,7 @@ struct SpendingValue {
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<TransactionStatus>,
 }
+
 impl From<SpendingInput> for SpendingValue {
     fn from(spend: SpendingInput) -> Self {
         SpendingValue {
@@ -586,15 +620,15 @@ async fn run_server(
                     let mut resp = tokio::task::block_in_place(|| {
                         handle_request(method, uri, body, &query, &config)
                     })
-                    .unwrap_or_else(|err| {
-                        warn!("{:?}", err);
-                        Response::builder()
-                            .status(err.0)
-                            .header("Content-Type", "text/plain")
-                            .header("X-Powered-By", &**VERSION_STRING)
-                            .body(Body::from(err.1))
-                            .unwrap()
-                    });
+                        .unwrap_or_else(|err| {
+                            warn!("{:?}", err);
+                            Response::builder()
+                                .status(err.0)
+                                .header("Content-Type", "text/plain")
+                                .header("X-Powered-By", &**VERSION_STRING)
+                                .body(Body::from(err.1))
+                                .unwrap()
+                        });
                     if let Some(ref origins) = config.cors {
                         resp.headers_mut()
                             .insert("Access-Control-Allow-Origin", origins.parse().unwrap());
@@ -703,6 +737,7 @@ fn handle_request(
             query.chain().best_hash().to_hex(),
             TTL_SHORT,
             config.sgx_enable,
+            config.sgx_test,
         ),
 
         (&Method::GET, Some(&"blocks"), Some(&"tip"), Some(&"height"), None, None) => http_message(
@@ -710,6 +745,7 @@ fn handle_request(
             query.chain().best_height().to_string(),
             TTL_SHORT,
             config.sgx_enable,
+            config.sgx_test,
         ),
 
         (
@@ -733,6 +769,7 @@ fn handle_request(
                 height.to_string(),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -752,6 +789,7 @@ fn handle_request(
                 header.hash().to_hex(),
                 ttl,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::GET, Some(&"block"), Some(hash), None, None, None) => {
@@ -761,13 +799,13 @@ fn handle_request(
                 .get_block_with_meta(&hash)
                 .ok_or_else(|| HttpError::not_found("Block not found".to_string()))?;
             let block_value = BlockValue::new(blockhm);
-            json_response(block_value, TTL_LONG, config.sgx_enable)
+            json_response(block_value, TTL_LONG, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"status"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
             let status = query.chain().get_block_status(&hash);
             let ttl = ttl_by_depth(status.height, query);
-            json_response(status, ttl, config.sgx_enable)
+            json_response(status, ttl, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txids"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
@@ -775,7 +813,7 @@ fn handle_request(
                 .chain()
                 .get_block_txids(&hash)
                 .ok_or_else(|| HttpError::not_found("Block not found".to_string()))?;
-            json_response(txids, TTL_LONG, config.sgx_enable)
+            json_response(txids, TTL_LONG, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&INTERNAL_PREFIX), Some(&"block"), Some(hash), Some(&"txs"), None) => {
             let hash = BlockHash::from_hex(hash)?;
@@ -789,7 +827,7 @@ fn handle_request(
                 .collect();
 
             let ttl = ttl_by_depth(block_id.map(|b| b.height), query);
-            json_response(prepare_txs(txs, query, config), ttl, config.sgx_enable)
+            json_response(prepare_txs(txs, query, config), ttl, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"header"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
@@ -799,7 +837,7 @@ fn handle_request(
                 .ok_or_else(|| HttpError::not_found("Block not found".to_string()))?;
 
             let header_hex = hex::encode(encode::serialize(&header));
-            http_message(StatusCode::OK, header_hex, TTL_LONG, config.sgx_enable)
+            http_message(StatusCode::OK, header_hex, TTL_LONG, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"raw"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
@@ -831,6 +869,7 @@ fn handle_request(
                 txids[index].to_hex(),
                 TTL_LONG,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txs"), start_index, None) => {
@@ -871,7 +910,7 @@ fn handle_request(
             // XXX orphraned blocks alway get TTL_SHORT
             let ttl = ttl_by_depth(confirmed_blockid.map(|b| b.height), query);
 
-            json_response(prepare_txs(txs, query, config), ttl, config.sgx_enable)
+            json_response(prepare_txs(txs, query, config), ttl, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(script_type @ &"address"), Some(script_str), None, None, None)
         | (&Method::GET, Some(script_type @ &"scripthash"), Some(script_str), None, None, None) => {
@@ -885,6 +924,7 @@ fn handle_request(
                 }),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (
@@ -915,6 +955,7 @@ fn handle_request(
                 }),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (
@@ -994,6 +1035,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1031,6 +1073,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (
@@ -1063,7 +1106,7 @@ fn handle_request(
                 .chain()
                 .summary(&script_hash[..], last_seen_txid.as_ref(), max_txs);
 
-            json_response(summary, TTL_SHORT, config.sgx_enable)
+            json_response(summary, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (
             &Method::GET,
@@ -1098,6 +1141,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1124,7 +1168,7 @@ fn handle_request(
                 .map(UtxoValue::from)
                 .collect();
             // XXX paging?
-            json_response(utxos, TTL_SHORT, config.sgx_enable)
+            json_response(utxos, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         (
@@ -1171,7 +1215,7 @@ fn handle_request(
             }
 
             // XXX paging?
-            json_response(choose_list, TTL_SHORT, config.sgx_enable)
+            json_response(choose_list, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::POST, Some(&"runes_extra_data"), None, None, None, None) => {
@@ -1185,7 +1229,7 @@ fn handle_request(
             let tx: bitcoin_new::Transaction = bitcoin_new::consensus::deserialize(&rawtx)
                 .map_err(|e| HttpError::from(e.to_string()))?;
             let op_return = parse_cross_data_from_op_return(&tx, is_deposit)?;
-            http_message(StatusCode::OK, op_return.to_hex(), 0, config.sgx_enable)
+            http_message(StatusCode::OK, op_return.to_hex(), 0, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::GET, Some(&"address-prefix"), Some(prefix), None, None, None) => {
@@ -1193,7 +1237,7 @@ fn handle_request(
                 return Err(HttpError::from("address search disabled".to_string()));
             }
             let results = query.chain().address_search(prefix, ADDRESS_SEARCH_LIMIT);
-            json_response(results, TTL_SHORT, config.sgx_enable)
+            json_response(results, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"tx"), Some(hash), None, None, None) => {
             let hash = Txid::from_hex(hash)?;
@@ -1211,9 +1255,10 @@ fn handle_request(
                     "Transaction missing prevouts",
                     0,
                     config.sgx_enable,
+                    config.sgx_test,
                 )
             } else {
-                json_response(tx.remove(0), ttl, config.sgx_enable)
+                json_response(tx.remove(0), ttl, config.sgx_enable, config.sgx_test)
             }
         }
         (&Method::POST, Some(&INTERNAL_PREFIX), Some(&"txs"), None, None, None) => {
@@ -1234,13 +1279,14 @@ fn handle_request(
                                 .map(|tx| (tx, query.chain().tx_confirming_block(txid)))
                         })
                         .collect();
-                    json_response(prepare_txs(txs, query, config), 0, config.sgx_enable)
+                    json_response(prepare_txs(txs, query, config), 0, config.sgx_enable, config.sgx_test)
                 }
                 Err(err) => http_message(
                     StatusCode::BAD_REQUEST,
                     err.to_string(),
                     0,
                     config.sgx_enable,
+                    config.sgx_test,
                 ),
             }
         }
@@ -1270,7 +1316,7 @@ fn handle_request(
             let hash = Txid::from_hex(hash)?;
             let status = query.get_tx_status(&hash);
             let ttl = ttl_by_depth(status.block_height, query);
-            json_response(status, ttl, config.sgx_enable)
+            json_response(status, ttl, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"merkle-proof"), None, None) => {
@@ -1286,6 +1332,7 @@ fn handle_request(
                 json!({ "block_height": blockid.height, "merkle": merkle, "pos": pos }),
                 ttl,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         #[cfg(not(feature = "liquid"))]
@@ -1305,6 +1352,7 @@ fn handle_request(
                 hex::encode(encode::serialize(&merkleblock)),
                 ttl_by_depth(height, query),
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"outspend"), Some(index), None) => {
@@ -1320,7 +1368,7 @@ fn handle_request(
                 spend.status.as_ref().and_then(|status| status.block_height),
                 query,
             );
-            json_response(spend, ttl, config.sgx_enable)
+            json_response(spend, ttl, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"outspends"), None, None) => {
             let hash = Txid::from_hex(hash)?;
@@ -1333,7 +1381,7 @@ fn handle_request(
                 .map(|spend| spend.map_or_else(SpendingValue::default, SpendingValue::from))
                 .collect();
             // @TODO long ttl if all outputs are either spent long ago or unspendable
-            json_response(spends, TTL_SHORT, config.sgx_enable)
+            json_response(spends, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"broadcast"), None, None, None, None)
         | (&Method::POST, Some(&"tx"), None, None, None, None) => {
@@ -1351,13 +1399,14 @@ fn handle_request(
                         "Invalid method",
                         0,
                         config.sgx_enable,
-                    )
+                        config.sgx_test,
+                    );
                 }
             };
             let txid = query
                 .broadcast_raw(&txhex)
                 .map_err(|err| HttpError::from(err.description().to_string()))?;
-            http_message(StatusCode::OK, txid.to_hex(), 0, config.sgx_enable)
+            http_message(StatusCode::OK, txid.to_hex(), 0, config.sgx_enable, config.sgx_test)
         }
         (&Method::POST, Some(&"txs"), Some(&"test"), None, None, None) => {
             let txhexes: Vec<String> =
@@ -1399,7 +1448,7 @@ fn handle_request(
                 .test_mempool_accept(txhexes, maxfeerate)
                 .map_err(|err| HttpError::from(err.description().to_string()))?;
 
-            json_response(result, TTL_SHORT, config.sgx_enable)
+            json_response(result, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"txs"), Some(&"outspends"), None, None, None) => {
             let txid_strings: Vec<&str> = query_params
@@ -1415,6 +1464,7 @@ fn handle_request(
                     "Too many txids requested",
                     0,
                     config.sgx_enable,
+                    config.sgx_test,
                 );
             }
 
@@ -1436,7 +1486,7 @@ fn handle_request(
                 })
                 .collect();
 
-            json_response(spends, TTL_SHORT, config.sgx_enable)
+            json_response(spends, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (
             &Method::POST,
@@ -1467,7 +1517,7 @@ fn handle_request(
                 })
                 .collect();
 
-            json_response(spends, TTL_SHORT, config.sgx_enable)
+            json_response(spends, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (
             &Method::POST,
@@ -1499,16 +1549,17 @@ fn handle_request(
                 })
                 .collect();
 
-            json_response(spends, TTL_SHORT, config.sgx_enable)
+            json_response(spends, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::GET, Some(&"mempool"), None, None, None, None) => json_response(
             query.mempool().backlog_stats(),
             TTL_SHORT,
             config.sgx_enable,
+            config.sgx_test,
         ),
         (&Method::GET, Some(&"mempool"), Some(&"txids"), None, None, None) => {
-            json_response(query.mempool().txids(), TTL_SHORT, config.sgx_enable)
+            json_response(query.mempool().txids(), TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
         (&Method::GET, Some(&"mempool"), Some(&"txids"), Some(&"page"), last_seen_txid, None) => {
             let last_seen_txid = last_seen_txid.and_then(|txid| Txid::from_hex(txid).ok());
@@ -1520,6 +1571,7 @@ fn handle_request(
                 query.mempool().txids_page(max_txs, last_seen_txid),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (
@@ -1541,6 +1593,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::POST, Some(&INTERNAL_PREFIX), Some(&"mempool"), Some(&"txs"), None, None) => {
@@ -1561,13 +1614,14 @@ fn handle_request(
                             .collect()
                     };
 
-                    json_response(prepare_txs(txs, query, config), 0, config.sgx_enable)
+                    json_response(prepare_txs(txs, query, config), 0, config.sgx_enable, config.sgx_test)
                 }
                 Err(err) => http_message(
                     StatusCode::BAD_REQUEST,
                     err.to_string(),
                     0,
                     config.sgx_enable,
+                    config.sgx_test,
                 ),
             }
         }
@@ -1595,16 +1649,17 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
         (&Method::GET, Some(&"mempool"), Some(&"recent"), None, None, None) => {
             let mempool = query.mempool();
             let recent = mempool.recent_txs_overview();
-            json_response(recent, TTL_MEMPOOL_RECENT, config.sgx_enable)
+            json_response(recent, TTL_MEMPOOL_RECENT, config.sgx_enable, config.sgx_test)
         }
 
         (&Method::GET, Some(&"fee-estimates"), None, None, None, None) => {
-            json_response(query.estimate_fee_map(), TTL_SHORT, config.sgx_enable)
+            json_response(query.estimate_fee_map(), TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         #[cfg(feature = "liquid")]
@@ -1641,7 +1696,7 @@ fn handle_request(
                 .lookup_asset(&asset_id)?
                 .ok_or_else(|| HttpError::not_found("Asset id not found".to_string()))?;
 
-            json_response(asset_entry, TTL_SHORT, config.sgx_enable)
+            json_response(asset_entry, TTL_SHORT, config.sgx_enable, config.sgx_test)
         }
 
         #[cfg(feature = "liquid")]
@@ -1670,6 +1725,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1700,6 +1756,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1718,6 +1775,7 @@ fn handle_request(
                 prepare_txs(txs, query, config),
                 TTL_SHORT,
                 config.sgx_enable,
+                config.sgx_test,
             )
         }
 
@@ -1740,6 +1798,7 @@ fn handle_request(
                     supply_dec.to_string(),
                     TTL_SHORT,
                     config.sgx_enable,
+                    config.sgx_test,
                 )
             } else {
                 http_message(
@@ -1747,6 +1806,7 @@ fn handle_request(
                     supply.to_string(),
                     TTL_SHORT,
                     config.sgx_enable,
+                    config.sgx_test,
                 )
             }
         }
@@ -1763,25 +1823,40 @@ fn http_message<T>(
     message: T,
     ttl: u32,
     sgx: bool,
+    sgx_test: bool,
 ) -> Result<Response<Body>, HttpError>
-where
-    T: Serialize,
+    where
+        T: Into<Body> + Serialize,
 {
-    let value = crate::reg::create_sgx_response(message, sgx);
+    if sgx {
+        let value = crate::reg::create_sgx_response(message, sgx_test);
 
-    Ok(Response::builder()
-        .status(status)
-        .header("Content-Type", "text/plain")
-        .header("Cache-Control", format!("public, max-age={:}", ttl))
-        .header("X-Powered-By", &**VERSION_STRING)
-        .body(Body::from(value))
-        .unwrap())
+        Ok(Response::builder()
+            .status(status)
+            .header("Content-Type", "text/plain")
+            .header("Cache-Control", format!("public, max-age={:}", ttl))
+            .header("X-Powered-By", &**VERSION_STRING)
+            .body(Body::from(value))
+            .unwrap())
+    } else {
+        Ok(Response::builder()
+            .status(status)
+            .header("Content-Type", "text/plain")
+            .header("Cache-Control", format!("public, max-age={:}", ttl))
+            .header("X-Powered-By", &**VERSION_STRING)
+            .body(message.into())
+            .unwrap())
+    }
 }
 
-fn json_response<T: Serialize>(value: T, ttl: u32, sgx: bool) -> Result<Response<Body>, HttpError> {
+fn json_response<T: Serialize>(value: T, ttl: u32, sgx: bool, sgx_test: bool) -> Result<Response<Body>, HttpError> {
     //let value = serde_json::to_string(&value)?;
 
-    let value = crate::reg::create_sgx_response(value, sgx);
+    let value = if sgx {
+        crate::reg::create_sgx_response(value, sgx_test)
+    } else {
+        serde_json::to_string(&value)?
+    };
 
     Ok(Response::builder()
         .header("Content-Type", "application/json")
@@ -1836,7 +1911,7 @@ fn blocks(
         current_hash = blockhm.header_entry.header().prev_blockhash;
 
         #[allow(unused_mut)]
-        let mut value = BlockValue::new(blockhm);
+            let mut value = BlockValue::new(blockhm);
 
         #[cfg(feature = "liquid")]
         {
@@ -1849,7 +1924,7 @@ fn blocks(
             break;
         }
     }
-    json_response(values, TTL_SHORT, config.sgx_enable)
+    json_response(values, TTL_SHORT, config.sgx_enable, config.sgx_test)
 }
 
 fn to_scripthash(
@@ -1858,36 +1933,65 @@ fn to_scripthash(
     network: Network,
 ) -> Result<FullHash, HttpError> {
     match script_type {
-        "address" => address_to_scripthash(script_str, network),
+        "address" => {
+            match network {
+                Network::Bitcoin | Network::Testnet | Network::Testnet4
+                | Network::Fractal | Network::FractalTestnet | Network::Regtest | Network::Signet => {
+                    address_to_scripthash(script_str, network)
+                }
+                Network::Dogecoin | Network::DogecoinTestnet | Network::DogecoinRegtest => {
+                    address_to_doge_scripthash(script_str, network)
+                }
+            }
+        }
         "scripthash" => parse_scripthash(script_str),
         _ => bail!("Invalid script type".to_string()),
     }
 }
 
+#[cfg(not(feature = "liquid"))]
+fn address_to_doge_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpError> {
+    let addr = dogecoin::Address::from_str(addr)?;
+    if !matches!(addr.network, DNetwork::Bitcoin | DNetwork::Testnet | DNetwork::Regtest) {
+        return Err(HttpError::from("Invalid dogecoin address".to_string()));
+    }
+    let addr_network = Network::from(addr.network);
+    if addr_network.ne(&network) {
+        bail!(HttpError::from("Address on invalid network".to_string()))
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(addr.script_pubkey().as_bytes());
+    Ok(
+        hasher.finalize()[..]
+            .try_into()
+            .expect("SHA256 size is 32 bytes")
+    )
+}
+
 fn address_to_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpError> {
     #[cfg(not(feature = "liquid"))]
-    let addr = address::Address::from_str(addr)?;
+        let addr = address::Address::from_str(addr)?;
     #[cfg(feature = "liquid")]
-    let addr = address::Address::parse_with_params(addr, network.address_params())?;
+        let addr = address::Address::parse_with_params(addr, network.address_params())?;
 
     #[cfg(not(feature = "liquid"))]
-    let is_expected_net = {
+        let is_expected_net = {
         let addr_network = Network::from(addr.network);
         debug!("{} network: {:?}", addr, addr_network);
         // Testnet, Regtest and Signet all share the same version bytes,
         // `addr_network` will be detected as Testnet for all of them.
         addr_network == network
             || (addr_network == Network::Testnet
-                && matches!(
+            && matches!(
                     network,
                     Network::Regtest | Network::Signet | Network::Testnet4
                 ))
             || (addr_network == Network::Bitcoin
-                && (network.eq(&Network::Fractal) || network.eq(&Network::FractalTestnet)))
+            && (network.eq(&Network::Fractal) || network.eq(&Network::FractalTestnet)))
     };
 
     #[cfg(feature = "liquid")]
-    let is_expected_net = addr.params == network.address_params();
+        let is_expected_net = addr.params == network.address_params();
 
     if !is_expected_net {
         bail!(HttpError::from("Address on invalid network".to_string()))
@@ -1959,36 +2063,42 @@ impl From<String> for HttpError {
         HttpError(StatusCode::BAD_REQUEST, msg)
     }
 }
+
 impl From<ParseIntError> for HttpError {
     fn from(_e: ParseIntError) -> Self {
         //HttpError::from(e.description().to_string())
         HttpError::from("Invalid number".to_string())
     }
 }
+
 impl From<HashError> for HttpError {
     fn from(_e: HashError) -> Self {
         //HttpError::from(e.description().to_string())
         HttpError::from("Invalid hash string".to_string())
     }
 }
+
 impl From<FromHexError> for HttpError {
     fn from(_e: FromHexError) -> Self {
         //HttpError::from(e.description().to_string())
         HttpError::from("Invalid hex string".to_string())
     }
 }
+
 impl From<bitcoin::hashes::hex::Error> for HttpError {
     fn from(_e: bitcoin::hashes::hex::Error) -> Self {
         //HttpError::from(e.description().to_string())
         HttpError::from("Invalid hex string".to_string())
     }
 }
+
 impl From<bitcoin::util::address::Error> for HttpError {
     fn from(_e: bitcoin::util::address::Error) -> Self {
         //HttpError::from(e.description().to_string())
         HttpError::from("Invalid Bitcoin address".to_string())
     }
 }
+
 impl From<errors::Error> for HttpError {
     fn from(e: errors::Error) -> Self {
         warn!("errors::Error: {:?}", e);
@@ -2000,21 +2110,32 @@ impl From<errors::Error> for HttpError {
         }
     }
 }
+
 impl From<serde_json::Error> for HttpError {
     fn from(e: serde_json::Error) -> Self {
         HttpError::from(e.to_string())
     }
 }
+
 impl From<encode::Error> for HttpError {
     fn from(e: encode::Error) -> Self {
         HttpError::from(e.to_string())
     }
 }
+
 impl From<std::string::FromUtf8Error> for HttpError {
     fn from(e: std::string::FromUtf8Error) -> Self {
         HttpError::from(e.to_string())
     }
 }
+
+impl From<dogecoin::util::address::Error> for HttpError {
+    fn from(_e: dogecoin::util::address::Error) -> Self {
+        //HttpError::from(e.description().to_string())
+        HttpError::from("Invalid Bitcoin address".to_string())
+    }
+}
+
 #[cfg(feature = "liquid")]
 impl From<address::AddressError> for HttpError {
     fn from(e: address::AddressError) -> Self {
@@ -2301,7 +2422,7 @@ mod tests {
             default_value.clone(),
             default_value,
         ]
-        .to_vec();
+            .to_vec();
         utxos[0].value = 1000;
         utxos[1].value = 1000;
         utxos[2].value = 100;

@@ -24,6 +24,11 @@ error_chain! {
             display("Too many history transactions (>{}). Contact support to raise limits.", limit)
         }
 
+        SgxError(msg: String) {
+            description("Some error returns from sgx.")
+            display("SGX error: {}", msg)
+        }
+
         #[cfg(feature = "electrum-discovery")]
         ElectrumClient(e: electrum_client::Error) {
             description("Electrum client error")
