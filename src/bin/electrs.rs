@@ -174,8 +174,26 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         // Index new blocks
         let current_tip = daemon.getbestblockhash()?;
         if current_tip != tip {
-            indexer.update(&daemon)?;
-            tip = current_tip;
+            if config.sgx_enable {
+                match indexer.sgx_update(&daemon) {
+                    Ok(_block_hash) => {
+                        tip = current_tip;
+                    }
+                    Err(err) => {
+                        if err
+                            .to_string()
+                            .contains("failed to get blocks from bitcoind")
+                        {
+                            error!("{err}");
+                        } else {
+                            return Err(err);
+                        }
+                    }
+                }
+            }else {
+                indexer.update(&daemon)?;
+                tip = current_tip;
+            }
         };
 
         // Update mempool
