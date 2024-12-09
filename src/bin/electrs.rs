@@ -119,8 +119,6 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         }
     }
 
-    indexer.initialize_hot_addresses();
-
     #[cfg(feature = "liquid")]
     let asset_db = config.asset_db_path.as_ref().map(|db_dir| {
         let asset_db = Arc::new(RwLock::new(AssetRegistry::new(db_dir.clone())));
@@ -172,9 +170,6 @@ fn run_server(config: Arc<Config>) -> Result<()> {
             // the electrum server is stopped when dropped
             break;
         }
-
-        // initialize hot addresses
-        indexer.initialize_hot_addresses();
 
         // Index new blocks
         let current_tip = daemon.getbestblockhash()?;
