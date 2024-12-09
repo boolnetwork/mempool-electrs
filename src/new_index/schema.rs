@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use crate::chain::{
@@ -37,6 +37,11 @@ use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
 
 #[cfg(feature = "liquid")]
 use crate::elements::{asset, peg};
+
+lazy_static! {
+    // script_hash: initialized
+    pub static ref HOT_ADDRESS: Mutex<HashMap<FullHash, bool>> = Mutex::new(HashMap::new());
+}
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
@@ -157,14 +162,14 @@ impl ScriptStats {
     fn is_sane(&self) -> bool {
         // There are less or equal spends to funds
         self.spent_txo_count <= self.funded_txo_count
-        // There are less or equal transactions to total spent+funded txo counts
-        // (Most spread out txo case = N funds in 1 tx each + M spends in 1 tx each = N + M txes)
-        && self.tx_count <= self.spent_txo_count + self.funded_txo_count
-        // There are less or equal spent coins to funded coins
-        && self.spent_txo_sum <= self.funded_txo_sum
-        // If funded and spent txos are equal (0 balance)
-        // Then funded and spent coins must be equal (0 balance)
-        && (self.funded_txo_count == self.spent_txo_count)
+            // There are less or equal transactions to total spent+funded txo counts
+            // (Most spread out txo case = N funds in 1 tx each + M spends in 1 tx each = N + M txes)
+            && self.tx_count <= self.spent_txo_count + self.funded_txo_count
+            // There are less or equal spent coins to funded coins
+            && self.spent_txo_sum <= self.funded_txo_sum
+            // If funded and spent txos are equal (0 balance)
+            // Then funded and spent coins must be equal (0 balance)
+            && (self.funded_txo_count == self.spent_txo_count)
             == (self.funded_txo_sum == self.spent_txo_sum)
     }
 }
@@ -203,7 +208,8 @@ impl From<&Config> for IndexerConfig {
 }
 
 pub struct ChainQuery {
-    store: Arc<Store>, // TODO: should be used as read-only
+    store: Arc<Store>,
+    // TODO: should be used as read-only
     daemon: Arc<Daemon>,
     light_mode: bool,
     duration: HistogramVec,
@@ -494,6 +500,116 @@ impl Indexer {
         };
         self.store.history_db.write(rows, self.flush);
     }
+
+    pub fn initialize_hot_addresses(&self) {
+        let mut hot_addresses = HOT_ADDRESS.lock().unwrap();
+        let best_height = self.store.indexed_headers.read().unwrap().len() - 1;
+        let mut height_stats_history_rows = vec![];
+        for (address, initialized) in hot_addresses.iter() {
+            let mut address_history = vec![];
+            let mut got_history = false;
+            if !initialized {
+                for height in 0..=best_height as u32 {
+                    let key = HeightStatsHistoryRow::key(address, height);
+                    if self.store.history_db.get(key.as_slice()).is_none() {
+                        if !got_history {
+                            address_history = self.store.history_db.iter_scan_from(
+                                &TxHistoryRow::filter(b'H', address),
+                                &TxHistoryRow::prefix_height(b'H', address, 0)
+                            )
+                                .map(TxHistoryRow::from_row)
+                                .filter_map(|history| {
+                                    let headers = self.store.indexed_headers.read().unwrap();
+                                    self.store
+                                        .txstore_db
+                                        .iter_scan(&TxConfRow::filter(&history.get_txid()[..]))
+                                        .map(TxConfRow::from_row)
+                                        // header_by_blockhash only returns blocks that are part of the best chain,
+                                        // or None for orphaned blocks.
+                                        .filter_map(|conf| {
+                                            headers.header_by_blockhash(&deserialize(&conf.key.blockhash).unwrap())
+                                        })
+                                        .next()
+                                        .map(BlockId::from)
+                                        .filter(|blockid| blockid.height == history.key.confirmed_height as usize)
+                                        .map(|blockid| (history, blockid))
+                                })
+                                .collect::<Vec<_>>();
+                            got_history = true;
+                        }
+
+                        let mut current_round_history = address_history
+                            .iter()
+                            .filter(|(history, _)|history.key.confirmed_height <= height);
+
+                        let mut stats = ScriptStats::default();
+                        let mut seen_txids = HashSet::new();
+                        let mut lastblock = None;
+
+                        while let Some((history,blockid)) = current_round_history.next() {
+                            if lastblock != Some(blockid.hash) {
+                                seen_txids.clear();
+                            }
+
+                            if seen_txids.insert(history.get_txid()) {
+                                stats.tx_count += 1;
+                            }
+
+                            match history.key.txinfo {
+                                #[cfg(not(feature = "liquid"))]
+                                TxHistoryInfo::Funding(ref info) => {
+                                    stats.funded_txo_count += 1;
+                                    stats.funded_txo_sum += info.value;
+                                }
+
+                                #[cfg(not(feature = "liquid"))]
+                                TxHistoryInfo::Spending(ref info) => {
+                                    stats.spent_txo_count += 1;
+                                    stats.spent_txo_sum += info.value;
+                                }
+
+                                #[cfg(feature = "liquid")]
+                                TxHistoryInfo::Funding(_) => {
+                                    stats.funded_txo_count += 1;
+                                }
+
+                                #[cfg(feature = "liquid")]
+                                TxHistoryInfo::Spending(_) => {
+                                    stats.spent_txo_count += 1;
+                                }
+
+                                #[cfg(feature = "liquid")]
+                                TxHistoryInfo::Issuing(_)
+                                | TxHistoryInfo::Burning(_)
+                                | TxHistoryInfo::Pegin(_)
+                                | TxHistoryInfo::Pegout(_) => unreachable!(),
+                            }
+
+                            lastblock = Some(blockid.hash);
+                        }
+
+                        if let Some(lastblock) = lastblock {
+                            height_stats_history_rows.push(
+                                HeightStatsHistoryRow::new(
+                                    address,
+                                    height,
+                                    &stats,
+                                    &lastblock
+                                ).into_row()
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        self.store.history_db.write(height_stats_history_rows, self.flush);
+
+        let addresses = hot_addresses.keys().map(|hash|*hash).collect::<Vec<_>>();
+        addresses.into_iter().for_each(|address|{
+            hot_addresses.insert(address, true);
+        })
+    }
 }
 
 impl ChainQuery {
@@ -767,7 +883,7 @@ impl ChainQuery {
         self._history(b'H', scripthash, last_seen_txid, limit)
     }
 
-    pub fn history_txids_iter<'a>(&'a self, scripthash: &[u8]) -> impl Iterator<Item = Txid> + 'a {
+    pub fn history_txids_iter<'a>(&'a self, scripthash: &[u8]) -> impl Iterator<Item=Txid> + 'a {
         self.history_iter_scan_reverse(b'H', scripthash)
             .map(|row| TxHistoryRow::from_row(row).get_txid())
             .unique()
@@ -864,7 +980,7 @@ impl ChainQuery {
                 // associated asset. the asset information could be kept in the db history rows
                 // alongside the value to avoid this.
                 #[cfg(feature = "liquid")]
-                let txo = self.lookup_txo(&outpoint).expect("missing utxo");
+                    let txo = self.lookup_txo(&outpoint).expect("missing utxo");
 
                 Utxo {
                     txid: outpoint.txid,
@@ -972,6 +1088,14 @@ impl ChainQuery {
         let (newstats, _lastblock) =
             self.stats_delta_special_height(scripthash, ScriptStats::default(), specific_height);
         newstats
+    }
+
+    pub fn add_hot_address(&self, scripthash: &[u8]) {
+        let mut hot_addresses = HOT_ADDRESS.lock().unwrap();
+        let hash = full_hash(scripthash);
+        if !hot_addresses.contains_key(&hash) {
+            hot_addresses.insert(hash, false);
+        }
     }
 
     fn stats_delta(
@@ -1742,7 +1866,7 @@ impl TxOutRow {
             txid: full_hash(&outpoint.txid[..]),
             vout: outpoint.vout as u16,
         })
-        .unwrap()
+            .unwrap()
     }
 
     fn into_row(self) -> DBRow {
@@ -1838,9 +1962,11 @@ pub struct FundingInfo {
 #[derive(Serialize, Deserialize, Debug)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct SpendingInfo {
-    pub txid: FullHash, // spending transaction
+    pub txid: FullHash,
+    // spending transaction
     pub vin: u16,
-    pub prev_txid: FullHash, // funding transaction
+    pub prev_txid: FullHash,
+    // funding transaction
     pub prev_vout: u16,
     pub value: Value,
 }
@@ -1876,17 +2002,21 @@ impl TxHistoryInfo {
             | TxHistoryInfo::Pegin(peg::PeginInfo { txid, .. })
             | TxHistoryInfo::Pegout(peg::PegoutInfo { txid, .. }) => deserialize(txid),
         }
-        .expect("cannot parse Txid")
+            .expect("cannot parse Txid")
     }
 }
 
 #[derive(Serialize, Deserialize)]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct TxHistoryKey {
-    pub code: u8,              // H for script history or I for asset history (elements only)
-    pub hash: FullHash, // either a scripthash (always on bitcoin) or an asset id (elements only)
-    pub confirmed_height: u32, // MUST be serialized as big-endian (for correct scans).
-    pub tx_position: u16, // MUST be serialized as big-endian (for correct scans). Position in block.
+    pub code: u8,
+    // H for script history or I for asset history (elements only)
+    pub hash: FullHash,
+    // either a scripthash (always on bitcoin) or an asset id (elements only)
+    pub confirmed_height: u32,
+    // MUST be serialized as big-endian (for correct scans).
+    pub tx_position: u16,
+    // MUST be serialized as big-endian (for correct scans). Position in block.
     pub txinfo: TxHistoryInfo,
 }
 
@@ -2027,6 +2157,52 @@ impl TxEdgeRow {
 }
 
 #[derive(Serialize, Deserialize)]
+struct ScriptHeightHistoryKey {
+    code: u8,
+    scripthash: FullHash,
+    confirmed_height: u32,
+}
+
+struct HeightStatsHistoryRow {
+    key: ScriptHeightHistoryKey,
+    value: Bytes,
+}
+
+impl HeightStatsHistoryRow {
+    fn new(
+        scripthash: &[u8],
+        confirmed_height: u32,
+        stats: &ScriptStats,
+        blockhash: &BlockHash
+    ) -> Self {
+        HeightStatsHistoryRow{
+            key: ScriptHeightHistoryKey{
+                code: b'W',
+                scripthash: full_hash(scripthash),
+                confirmed_height,
+            },
+            value: bincode_util::serialize_little(&(stats, blockhash)).unwrap(),
+        }
+    }
+
+    pub fn key(
+        scripthash: &[u8],
+        confirmed_height: u32,
+    ) -> Bytes {
+        [b"A", scripthash, &confirmed_height.to_le_bytes()].concat()
+    }
+
+    fn into_row(self) -> DBRow {
+        DBRow {
+            key: bincode_util::serialize_little(&self.key).unwrap(),
+            value: self.value,
+        }
+    }
+}
+
+
+
+#[derive(Serialize, Deserialize)]
 struct ScriptCacheKey {
     code: u8,
     scripthash: FullHash,
@@ -2128,13 +2304,13 @@ mod tests {
     #[test]
     fn tx_history_row_ser_deser_tests() {
         #[rustfmt::skip]
-        let inputs = [
+            let inputs = [
             vec![
                 // code
                 72,
                 // hash
                 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
                 // confirmed_height
                 0, 0, 0, 2,
                 // tx_position
@@ -2144,7 +2320,7 @@ mod tests {
                 // FundingInfo
                 // txid
                 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-                   2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
                 // vout
                 0, 3,
                 // Value variant (Explicit)
@@ -2157,12 +2333,12 @@ mod tests {
             vec![
                 72,
                 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
                 0, 0, 0, 2,
                 0, 3,
                 0, 0, 0, 1,
                 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-                   2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
                 0, 3,
                 // Value variant (Null)
                 0, 0, 0, 0, 0, 0, 0, 1,
@@ -2172,15 +2348,15 @@ mod tests {
             vec![
                 72,
                 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
                 0, 0, 0, 2,
                 0, 3,
                 0, 0, 0, 0,
                 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-                    18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+                18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
                 0, 12,
                 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
-                    98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
+                98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
                 0, 9,
                 0, 0, 0, 0, 0, 0, 0, 2,
                 1,
@@ -2189,15 +2365,15 @@ mod tests {
             vec![
                 72,
                 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
                 0, 0, 0, 2,
                 0, 3,
                 0, 0, 0, 0,
                 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-                    18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+                18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
                 0, 12,
                 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
-                    98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
+                98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
                 0, 9,
                 0, 0, 0, 0, 0, 0, 0, 1,
                 0,
@@ -2262,7 +2438,7 @@ mod tests {
             },
         ];
         for (expected_row, input) in
-            IntoIterator::into_iter(expected).zip(IntoIterator::into_iter(inputs))
+        IntoIterator::into_iter(expected).zip(IntoIterator::into_iter(inputs))
         {
             let input_row = DBRow {
                 key: input,
@@ -2281,7 +2457,7 @@ mod tests {
                 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
                 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102, 98, 101, 101, 102,
                 // height
-                0, 0, 5, 57
+                0, 0, 5, 57,
             ]
         );
     }

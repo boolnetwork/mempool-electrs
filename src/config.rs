@@ -63,6 +63,7 @@ pub struct Config {
     pub rest_default_max_address_summary_txs: usize,
     pub rest_max_mempool_page_size: usize,
     pub rest_max_mempool_txid_page_size: usize,
+    pub rest_cookie: String,
 
     pub subclient_url: String,
     pub warn_time: u16,
@@ -276,6 +277,12 @@ impl Config {
                     .long("rest-max-mempool-txid-page-size")
                     .help("The maximum number of transactions returned by the paginated /mempool/txids/page endpoint.")
                     .default_value("10000")
+            )
+            .arg(
+                Arg::with_name("rest_cookie")
+                    .long("rest-cookie")
+                    .help("rest server cookie")
+                    .required(true)
             )
             .arg(
                 Arg::with_name("electrum_txs_limit")
@@ -610,6 +617,8 @@ impl Config {
         });
         log.init().expect("logging initialization failed");
 
+        let rest_cookie = m.value_of("rest_cookie").expect("rest_cookie");
+
         let subclient_url = m.value_of("subclient_url").expect("subclient_url");
         let device_owner = m.value_of("device_owner").expect("device_owner");
         let watcher_device_id = m.value_of("watcher_device_id").expect("watcher_device_id");
@@ -680,6 +689,7 @@ impl Config {
                 "rest_max_mempool_txid_page_size",
                 usize
             ),
+            rest_cookie: rest_cookie.to_string(),
             jsonrpc_import: m.is_present("jsonrpc_import"),
             light_mode: m.is_present("light_mode"),
             main_loop_delay: value_t_or_exit!(m, "main_loop_delay", u64),

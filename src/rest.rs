@@ -950,10 +950,44 @@ fn handle_request(
             json_response(
                 json!({
                     *script_type: script_str,
-                    "chain_stats": stats.0,
-                    "mempool_stats": stats.1,
+                    "chain_stats": stats,
                 }),
                 TTL_SHORT,
+                config.sgx_enable,
+                config.sgx_test,
+            )
+        }
+        (
+            &Method::GET,
+            Some(script_type @ &"address"),
+            Some(script_str),
+            Some(&"hot"),
+            Some(cookie),
+            None,
+        )
+        | (
+            &Method::GET,
+            Some(script_type @ &"scripthash"),
+            Some(script_str),
+            Some(&"hot"),
+            Some(cookie),
+            None,
+        ) => {
+            let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
+            if cookie.ne(&config.rest_cookie) {
+                return http_message(
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "Illegal cookie",
+                    0,
+                    config.sgx_enable,
+                    config.sgx_test,
+                );
+            }
+           query.add_hot_address(&script_hash[..]);
+            http_message(
+                StatusCode::OK,
+                "ok",
+                TTL_LONG,
                 config.sgx_enable,
                 config.sgx_test,
             )

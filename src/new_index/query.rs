@@ -137,11 +137,15 @@ impl Query {
         &self,
         scripthash: &[u8],
         specific_height: usize,
-    ) -> (ScriptStats, ScriptStats) {
-        (
-            self.chain.stats_limit_height(scripthash, specific_height),
-            self.mempool().stats(scripthash),
-        )
+    ) -> ScriptStats {
+        self.chain.stats_limit_height(scripthash, specific_height)
+    }
+
+    pub fn add_hot_address(
+        &self,
+        scripthash: &[u8],
+    ) {
+        self.chain.add_hot_address(scripthash)
     }
 
     pub fn lookup_txn(&self, txid: &Txid) -> Option<Transaction> {
