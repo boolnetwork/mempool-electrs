@@ -685,6 +685,7 @@ impl Indexer {
 
         let addresses: Vec<_> = hot_addresses.keys().cloned().collect();
         addresses.into_iter().for_each(|address| {
+            info!("hot address script: {} updated", address.to_hex());
             hot_addresses.insert(address, best_height);
         });
     }
