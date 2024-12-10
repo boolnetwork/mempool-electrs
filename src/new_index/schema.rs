@@ -1596,12 +1596,14 @@ impl ChainQuery {
 }
 
 fn initialize_hot_address(db: &DB) -> HashMap<FullHash, u32> {
+    info!("initializing hot addresses");
     let mut hot_addresses = HashMap::new();
     db.iter_scan(&HeightStatsHistoryRow::header_filter())
         .map(HeightStatsHistoryRow::from_row)
         .for_each(|r| {
             hot_addresses.insert(r.key.scripthash, r.key.confirmed_height);
         });
+    info!("hot addresses initialized");
     hot_addresses
 }
 
