@@ -641,8 +641,8 @@ async fn run_server(
                     ) {
                         (
                             &Method::GET,
-                            Some(_script_type @ &"address"), // 0
-                            Some(&"hot"), // 2
+                            Some(_script_type @ &"address"),
+                            Some(&"hot"),
                         )
                         | (
                             &Method::GET,

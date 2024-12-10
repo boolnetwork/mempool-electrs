@@ -1,4 +1,4 @@
-use bitcoin::hashes::sha256d::Hash as Sha256dHash;
+use bitcoin::hashes::{sha256d::Hash as Sha256dHash, hex::ToHex};
 #[cfg(not(feature = "liquid"))]
 use bitcoin::util::merkleblock::MerkleBlock;
 use bitcoin::VarInt;
@@ -1187,6 +1187,7 @@ impl ChainQuery {
         let mut hot_addresses = HOT_ADDRESS.write().unwrap();
         let hash = full_hash(scripthash);
         hot_addresses.entry(hash).or_insert(0);
+        info!("script: {} added to hot addresses", hash.to_hex());
     }
 
     fn stats_delta(
