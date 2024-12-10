@@ -635,9 +635,9 @@ impl Indexer {
 
         self.store.stats_history_db.write(height_stats_history_rows, self.flush);
 
-        let addresses = hot_addresses.keys().map(|hash| *hash).collect::<Vec<_>>();
+        let addresses: Vec<_> = hot_addresses.keys().cloned().collect();
         addresses.into_iter().for_each(|address| {
-            hot_addresses.insert(address, best_height as u32);
+            hot_addresses.insert(address, best_height);
         });
     }
 }
@@ -1121,11 +1121,11 @@ impl ChainQuery {
     }
 
     fn height_stats_history(&self, key: &[u8]) -> Option<ScriptStats> {
-        if let Some(value_b) = self.store.stats_history_db.get(key) {
-            Some(bincode_util::deserialize_little::<ScriptStats>(&value_b).unwrap())
-        } else {
-            None
-        }
+        self.store.stats_history_db
+            .get(key)
+            .map(
+                |value_b| bincode_util::deserialize_little::<ScriptStats>(&value_b).unwrap()
+            )
     }
 
     fn height_stats_history_iter_scan_reverse(&self, scripthash: &[u8]) -> ReverseScanIterator {
@@ -1138,9 +1138,7 @@ impl ChainQuery {
     pub fn add_hot_address(&self, scripthash: &[u8]) {
         let mut hot_addresses = HOT_ADDRESS.write().unwrap();
         let hash = full_hash(scripthash);
-        if !hot_addresses.contains_key(&hash) {
-            hot_addresses.insert(hash, 0);
-        }
+        hot_addresses.entry(hash).or_insert(0);
     }
 
     fn stats_delta(

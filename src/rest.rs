@@ -245,11 +245,8 @@ impl TxInValue {
 
         let innerscripts = prevout.map(|prevout| get_innerscripts(txin, prevout));
 
-        let prevout = if let Some(prevout) = prevout {
-            Some(TxOutValue::new(prevout, config))
-        } else {
-            None
-        };
+        let prevout = prevout.map(|prevout| TxOutValue::new(prevout, config));
+
 
         TxInValue {
             txid: txin.previous_output.txid,
@@ -615,7 +612,62 @@ async fn run_server(
                 async move {
                     let method = req.method().clone();
                     let uri = req.uri().clone();
+                    let headers = req.headers().clone();
                     let body = hyper::body::to_bytes(req.into_body()).await?;
+
+                    let path: Vec<&str> = uri.path().split('/').skip(1).collect();
+                    match (
+                        &method,
+                        path.first(),
+                        path.get(2),
+                    ) {
+                        (
+                            &Method::GET,
+                            Some(_script_type @ &"address"), // 0
+                            Some(&"hot"), // 2
+                        )
+                        | (
+                            &Method::GET,
+                            Some(_script_type @ &"scripthash"),
+                            Some(&"hot"),
+                        ) => {
+                            if let Some(manager_cors) = &config.manager_cors {
+                                if let Some(auth) = headers.get("Authorization") {
+                                    if let Ok(token) = auth.to_str() {
+                                        if token != format!("Bearer {}", manager_cors) {
+                                            return Ok::<_, hyper::Error>(
+                                                Response::builder()
+                                                    .status(StatusCode::UNAUTHORIZED)
+                                                    .header("Content-Type", "text/plain")
+                                                    .header("X-Powered-By", &**VERSION_STRING)
+                                                    .body(Body::from(StatusCode::UNAUTHORIZED.to_string()))
+                                                    .unwrap()
+                                            );
+                                        }
+                                    }else {
+                                        return Ok::<_, hyper::Error>(
+                                            Response::builder()
+                                                .status(StatusCode::UNAUTHORIZED)
+                                                .header("Content-Type", "text/plain")
+                                                .header("X-Powered-By", &**VERSION_STRING)
+                                                .body(Body::from(StatusCode::UNAUTHORIZED.to_string()))
+                                                .unwrap()
+                                        );
+                                    }
+                                } else {
+                                    return Ok::<_, hyper::Error>(
+                                        Response::builder()
+                                            .status(StatusCode::UNAUTHORIZED)
+                                            .header("Content-Type", "text/plain")
+                                            .header("X-Powered-By", &**VERSION_STRING)
+                                            .body(Body::from(StatusCode::UNAUTHORIZED.to_string()))
+                                            .unwrap()
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
 
                     let mut resp = tokio::task::block_in_place(|| {
                         handle_request(method, uri, body, &query, &config)

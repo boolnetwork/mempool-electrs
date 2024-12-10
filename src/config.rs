@@ -50,6 +50,7 @@ pub struct Config {
     pub address_search: bool,
     pub index_unspendables: bool,
     pub cors: Option<String>,
+    pub manager_cors: Option<String>,
     pub precache_scripts: Option<String>,
     pub precache_threads: usize,
     pub utxos_limit: usize,
@@ -209,6 +210,11 @@ impl Config {
                 Arg::with_name("cors")
                     .long("cors")
                     .help("Origins allowed to make cross-site requests")
+                    .takes_value(true)
+            ).arg(
+                Arg::with_name("manager_cors")
+                    .long("manager-cors")
+                    .help("Origins allowed to manage")
                     .takes_value(true)
             )
             .arg(
@@ -686,6 +692,7 @@ impl Config {
             address_search: m.is_present("address_search"),
             index_unspendables: m.is_present("index_unspendables"),
             cors: m.value_of("cors").map(|s| s.to_string()),
+            manager_cors: m.value_of("manager_cors").map(|s| s.to_string()),
             precache_scripts: m.value_of("precache_scripts").map(|s| s.to_string()),
             precache_threads: m.value_of("precache_threads").map_or_else(
                 || {
