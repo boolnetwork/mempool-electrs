@@ -40,10 +40,14 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::num::ParseIntError;
 use std::os::unix::fs::FileTypeExt;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use sha2::{Digest, Sha256};
 use url::form_urlencoded;
+
+lazy_static! {
+    pub static ref RELOAD: Arc<RwLock<bool>> = std::sync::Arc::new(RwLock::new(false));
+}
 
 const ADDRESS_SEARCH_LIMIT: usize = 10;
 
@@ -597,23 +601,37 @@ async fn run_server(
 
     let config = Arc::clone(&config);
     let query = Arc::clone(&query);
+    let reload = Arc::clone(&RELOAD);
 
     let make_service_fn_inn = || {
         let query = Arc::clone(&query);
         let config = Arc::clone(&config);
         let metric = metric.clone();
+        let reload = Arc::clone(&reload);
 
         async move {
             Ok::<_, hyper::Error>(service_fn(move |req| {
                 let query = Arc::clone(&query);
                 let config = Arc::clone(&config);
                 let timer = metric.with_label_values(&["all_methods"]).start_timer();
-
+                let reload = Arc::clone(&reload);
                 async move {
                     let method = req.method().clone();
                     let uri = req.uri().clone();
                     let headers = req.headers().clone();
                     let body = hyper::body::to_bytes(req.into_body()).await?;
+
+                    let reload = reload.read().unwrap();
+                    if *reload /*state.stop*/ {
+                        return Ok::<_, hyper::Error>(
+                            Response::builder()
+                                .status(StatusCode::SERVICE_UNAVAILABLE)
+                                .header("Content-Type", "text/plain")
+                                .header("X-Powered-By", &**VERSION_STRING)
+                                .body(Body::from("Server reloading".to_string()))
+                                .unwrap()
+                        );
+                    }
 
                     let path: Vec<&str> = uri.path().split('/').skip(1).collect();
                     match (
@@ -644,7 +662,7 @@ async fn run_server(
                                                     .unwrap()
                                             );
                                         }
-                                    }else {
+                                    } else {
                                         return Ok::<_, hyper::Error>(
                                             Response::builder()
                                                 .status(StatusCode::UNAUTHORIZED)

@@ -37,6 +37,7 @@ use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
 
 #[cfg(feature = "liquid")]
 use crate::elements::{asset, peg};
+use crate::rest::RELOAD;
 
 lazy_static! {
     // script_hash: latest_update_block_height
@@ -93,6 +94,44 @@ impl Store {
             indexed_blockhashes: RwLock::new(indexed_blockhashes),
             indexed_headers: RwLock::new(headers),
         }
+    }
+
+    pub fn reload_store(&self) {
+        info!("store reloading");
+        let mut reload = RELOAD.write().unwrap();
+        *reload = true;
+        drop(reload);
+
+        let added_blockhashes = load_blockhashes(self.txstore_db(), &BlockRow::done_filter());
+        debug!("{} blocks were added", added_blockhashes.len());
+
+        let indexed_blockhashes = load_blockhashes(self.history_db(), &BlockRow::done_filter());
+        debug!("{} blocks were indexed", indexed_blockhashes.len());
+
+        initalize_hot_address(self.stats_history_db());
+
+        let headers = if let Some(tip_hash) = self.txstore_db.get(b"t") {
+            let tip_hash = deserialize(&tip_hash).expect("invalid chain tip in `t`");
+            let headers_map = load_blockheaders(self.txstore_db());
+            debug!(
+                "{} headers were loaded, tip at {:?}",
+                headers_map.len(),
+                tip_hash
+            );
+            HeaderList::new(headers_map, tip_hash)
+        } else {
+            HeaderList::empty()
+        };
+
+        let mut added_blockhashes_reload = self.added_blockhashes.write().unwrap();
+        let mut indexed_blockhashes_reload = self.indexed_blockhashes.write().unwrap();
+        let mut indexed_headers_reload = self.indexed_headers.write().unwrap();
+        *added_blockhashes_reload = added_blockhashes;
+        *indexed_blockhashes_reload = indexed_blockhashes;
+        *indexed_headers_reload = headers;
+        info!("reload finished");
+        let mut reload = RELOAD.write().unwrap();
+        *reload = false;
     }
 
     pub fn txstore_db(&self) -> &DB {
@@ -329,7 +368,12 @@ impl Indexer {
 
         let mut headers = self.store.indexed_headers.write().unwrap();
         headers.apply(new_headers);
-        assert_eq!(tip, *headers.tip());
+
+        if tip != *headers.tip() {
+            return Err(Error::from_kind(
+                ErrorKind::UpdateError("header not matched".to_string())
+            ))
+        }
 
         if let FetchFrom::BlkFiles = self.from {
             self.from = FetchFrom::Bitcoind;
@@ -384,7 +428,11 @@ impl Indexer {
 
         let mut headers = self.store.indexed_headers.write().unwrap();
         headers.apply(new_headers);
-        assert_eq!(tip, *headers.tip());
+        if tip != *headers.tip() {
+            return Err(Error::from_kind(
+                ErrorKind::UpdateError("header not matched".to_string())
+            ))
+        }
 
         if let FetchFrom::BlkFiles = self.from {
             self.from = FetchFrom::Bitcoind;
@@ -1542,6 +1590,9 @@ impl ChainQuery {
 
 fn initalize_hot_address(db: &DB) {
     let mut hot_addresses = HOT_ADDRESS.write().unwrap();
+    if !hot_addresses.is_empty() {
+        hot_addresses.clear();
+    }
     let mut db_iter = db.raw_iterator();
     while db_iter.valid() {
         let key = db_iter.key().unwrap();

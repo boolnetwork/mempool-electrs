@@ -75,22 +75,66 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                     break;
                 }
                 Err(err) => {
-                    if err
-                        .to_string()
-                        .contains("failed to get blocks from bitcoind")
-                    {
-                        error!("{err}");
-                    } else {
-                        return Err(err);
+                    match err {
+                        Error(ErrorKind::UpdateError(msg), _) => {
+                            error!("{}", msg);
+                            store.reload_store();
+                        }
+                        _ => {
+                            if err
+                                .to_string()
+                                .contains("failed to get blocks from bitcoind")
+                            {
+                                error!("{err}");
+                            } else {
+                                return Err(err);
+                            }
+                        }
                     }
                 }
             }
         }
     } else {
-        tip.replace(indexer.update(&daemon)?);
+        loop {
+            match indexer.update(&daemon) {
+                Ok(hash) => {
+                    tip.replace(hash);
+                    break;
+                },
+                Err(err) => {
+                    match err {
+                        Error(ErrorKind::UpdateError(msg), _) => {
+                            error!("{}", msg);
+                            store.reload_store();
+                        }
+                        _ => {
+                            return Err(err)
+                        }
+                    }
+                }
+            };
+        }
     };
     #[cfg(feature = "liquid")]
-    tip.replace(indexer.update(&daemon)?);
+    loop {
+        match indexer.update(&daemon) {
+            Ok(hash) => {
+                tip.replace(hash);
+                break;
+            },
+            Err(err) => {
+                match err {
+                    Error(ErrorKind::UpdateError(msg), _) => {
+                        error!("{}", msg);
+                        store.reload_store();
+                    }
+                    _ => {
+                        return Err(err)
+                    }
+                }
+            }
+        };
+    }
 
     let mut tip = tip.unwrap();
 
@@ -180,18 +224,39 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                         tip = current_tip;
                     }
                     Err(err) => {
-                        if err
-                            .to_string()
-                            .contains("failed to get blocks from bitcoind")
-                        {
-                            error!("{err}");
-                        } else {
-                            return Err(err);
+                        match err {
+                            Error(ErrorKind::UpdateError(msg), _) => {
+                                error!("{}", msg);
+                                store.reload_store();
+                            }
+                            _ => {
+                                if err
+                                    .to_string()
+                                    .contains("failed to get blocks from bitcoind")
+                                {
+                                    error!("{err}");
+                                } else {
+                                    return Err(err);
+                                }
+                            }
                         }
                     }
                 }
             }else {
-                indexer.update(&daemon)?;
+                match indexer.update(&daemon) {
+                    Ok(_hash) => {},
+                    Err(err) => {
+                        match err {
+                            Error(ErrorKind::UpdateError(msg), _) => {
+                                error!("{}", msg);
+                                store.reload_store();
+                            }
+                            _ => {
+                                return Err(err)
+                            }
+                        }
+                    }
+                };
                 tip = current_tip;
             }
         };
