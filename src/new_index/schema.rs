@@ -50,6 +50,7 @@ pub struct Store {
     txstore_db: DB,
     history_db: DB,
     cache_db: DB,
+    stats_history_db: DB,
     added_blockhashes: RwLock<HashSet<BlockHash>>,
     indexed_blockhashes: RwLock<HashSet<BlockHash>>,
     indexed_headers: RwLock<HeaderList>,
@@ -66,6 +67,9 @@ impl Store {
         debug!("{} blocks were indexed", indexed_blockhashes.len());
 
         let cache_db = DB::open(&path.join("cache"), config);
+
+        let stats_history_db = DB::open(&path.join("statshistory"), config);
+        initalize_hot_address(&stats_history_db);
 
         let headers = if let Some(tip_hash) = txstore_db.get(b"t") {
             let tip_hash = deserialize(&tip_hash).expect("invalid chain tip in `t`");
@@ -84,6 +88,7 @@ impl Store {
             txstore_db,
             history_db,
             cache_db,
+            stats_history_db,
             added_blockhashes: RwLock::new(added_blockhashes),
             indexed_blockhashes: RwLock::new(indexed_blockhashes),
             indexed_headers: RwLock::new(headers),
@@ -100,6 +105,10 @@ impl Store {
 
     pub fn cache_db(&self) -> &DB {
         &self.cache_db
+    }
+
+    pub fn stats_history_db(&self) -> &DB {
+        &self.stats_history_db
     }
 
     pub fn done_initial_sync(&self) -> bool {
@@ -303,10 +312,14 @@ impl Indexer {
         start_fetcher(self.from, &daemon, to_index)?.map(|blocks| self.index(&blocks));
         self.start_auto_compactions(&self.store.history_db);
 
+        self.update_hot_addresses();
+        self.start_auto_compactions(&self.store.stats_history_db);
+
         if let DBFlush::Disable = self.flush {
             debug!("flushing to disk");
             self.store.txstore_db.flush();
             self.store.history_db.flush();
+            self.store.stats_history_db.flush();
             self.flush = DBFlush::Enable;
         }
 
@@ -340,12 +353,7 @@ impl Indexer {
             self.from
         );
 
-        let start = Instant::now();
         crate::reg::add_blocks(self, &daemon, to_add)?;
-        debug!(
-            "add_blocks cost :{:?}",
-            Instant::now().duration_since(start)
-        );
 
         self.start_auto_compactions(&self.store.txstore_db);
 
@@ -356,18 +364,17 @@ impl Indexer {
             self.from
         );
 
-        let start = Instant::now();
         crate::reg::index(self, &daemon, to_index)?;
-        debug!("index cost :{:?}", Instant::now().duration_since(start));
+        self.start_auto_compactions(&self.store.history_db);
 
         self.update_hot_addresses();
-
-        self.start_auto_compactions(&self.store.history_db);
+        self.start_auto_compactions(&self.store.stats_history_db);
 
         if let DBFlush::Disable = self.flush {
             debug!("flushing to disk");
             self.store.txstore_db.flush();
             self.store.history_db.flush();
+            self.store.stats_history_db.flush();
             self.flush = DBFlush::Enable;
         }
 
@@ -515,7 +522,7 @@ impl Indexer {
             if *latest_update_height != best_height {
                 for height in *latest_update_height..=best_height {
                     let key = HeightStatsHistoryRow::key(address, height);
-                    match self.store.history_db.get(key.as_slice()) {
+                    match self.store.stats_history_db.get(key.as_slice()) {
                         None => {
                             if !got_history {
                                 address_tx_history = self.store.history_db.iter_scan_from(
@@ -626,7 +633,7 @@ impl Indexer {
             }
         }
 
-        self.store.history_db.write(height_stats_history_rows, self.flush);
+        self.store.stats_history_db.write(height_stats_history_rows, self.flush);
 
         let addresses = hot_addresses.keys().map(|hash| *hash).collect::<Vec<_>>();
         addresses.into_iter().for_each(|address| {
@@ -1113,6 +1120,21 @@ impl ChainQuery {
         newstats
     }
 
+    fn height_stats_history(&self, key: &[u8]) -> Option<ScriptStats> {
+        if let Some(value_b) = self.store.stats_history_db.get(key) {
+            Some(bincode_util::deserialize_little::<ScriptStats>(&value_b).unwrap())
+        } else {
+            None
+        }
+    }
+
+    fn height_stats_history_iter_scan_reverse(&self, scripthash: &[u8]) -> ReverseScanIterator {
+        self.store.stats_history_db.iter_scan_reverse(
+            &HeightStatsHistoryRow::filter(scripthash),
+            &HeightStatsHistoryRow::prefix_end(scripthash),
+        )
+    }
+
     pub fn add_hot_address(&self, scripthash: &[u8]) {
         let mut hot_addresses = HOT_ADDRESS.write().unwrap();
         let hash = full_hash(scripthash);
@@ -1194,9 +1216,24 @@ impl ChainQuery {
         init_stats: ScriptStats,
         special_height: usize,
     ) -> (ScriptStats, Option<BlockHash>) {
-        let _timer = self.start_timer("stats_delta_special_height"); // TODO: measure also the number of txns processed.
+        let _timer = self.start_timer("stats_delta_special_height");
+        let (mut stats, start_height) = if HOT_ADDRESS.read().unwrap().contains_key(scripthash) {
+            let height_stats_history_key = HeightStatsHistoryRow::key(scripthash, special_height as u32);
+            if let Some(stats) = self.height_stats_history(&height_stats_history_key) {
+                return (stats, self.blockid_by_height(special_height).map(|blockid| blockid.hash));
+            }
+            if let Some(stats_row) = self.height_stats_history_iter_scan_reverse(scripthash).next() {
+                let next_stats_history = HeightStatsHistoryRow::from_row(stats_row);
+                (bincode_util::deserialize_little(&next_stats_history.value).unwrap(), next_stats_history.key.confirmed_height as usize)
+            }else {
+                (init_stats, 0)
+            }
+        }else {
+            (init_stats, 0)
+        };
+
         let history_iter = self
-            .history_iter_scan(b'H', scripthash, 0)
+            .history_iter_scan(b'H', scripthash, start_height)
             .map(TxHistoryRow::from_row)
             .filter(|history| history.key.confirmed_height as usize <= special_height)
             .filter_map(|history| {
@@ -1208,7 +1245,6 @@ impl ChainQuery {
             })
             .collect::<Vec<_>>();
 
-        let mut stats = init_stats;
         let mut seen_txids = HashSet::new();
         let mut lastblock = None;
 
@@ -1503,6 +1539,20 @@ impl ChainQuery {
     #[cfg(feature = "liquid")]
     pub fn asset_history_txids(&self, asset_id: &AssetId, limit: usize) -> Vec<(Txid, BlockId)> {
         self._history_txids(b'I', &asset_id.into_inner()[..], limit)
+    }
+}
+
+fn initalize_hot_address(db: &DB) {
+    let mut hot_addresses = HOT_ADDRESS.write().unwrap();
+    let mut db_iter = db.raw_iterator();
+    while db_iter.valid() {
+        let key = db_iter.key().unwrap();
+        if !key.starts_with(b"W") {
+            break;
+        }
+        let stats_history_key: HeightStatsHistoryKey = bincode_util::deserialize_little(key).unwrap();
+        hot_addresses.insert(stats_history_key.scripthash, stats_history_key.confirmed_height);
+        db_iter.next();
     }
 }
 
@@ -2180,14 +2230,14 @@ impl TxEdgeRow {
 }
 
 #[derive(Serialize, Deserialize)]
-struct ScriptHeightHistoryKey {
+struct HeightStatsHistoryKey {
     code: u8,
     scripthash: FullHash,
     confirmed_height: u32,
 }
 
 struct HeightStatsHistoryRow {
-    key: ScriptHeightHistoryKey,
+    key: HeightStatsHistoryKey,
     value: Bytes,
 }
 
@@ -2198,7 +2248,7 @@ impl HeightStatsHistoryRow {
         stats: &ScriptStats,
     ) -> Self {
         HeightStatsHistoryRow {
-            key: ScriptHeightHistoryKey {
+            key: HeightStatsHistoryKey {
                 code: b'W',
                 scripthash: full_hash(scripthash),
                 confirmed_height,
@@ -2207,17 +2257,32 @@ impl HeightStatsHistoryRow {
         }
     }
 
+    fn filter(scripthash: &[u8]) -> Bytes {
+        [b"W", scripthash].concat()
+    }
+
+    fn prefix_end(scripthash: &[u8]) -> Bytes {
+        bincode_util::serialize_big(&(b'W', full_hash(scripthash), u32::MAX)).unwrap()
+    }
+
     pub fn key(
         scripthash: &[u8],
         confirmed_height: u32,
     ) -> Bytes {
-        [b"A", scripthash, &confirmed_height.to_le_bytes()].concat()
+        [b"W", scripthash, &confirmed_height.to_le_bytes()].concat()
     }
 
     fn into_row(self) -> DBRow {
         DBRow {
             key: bincode_util::serialize_little(&self.key).unwrap(),
             value: self.value,
+        }
+    }
+
+    fn from_row(row: DBRow) -> Self {
+        HeightStatsHistoryRow {
+            key: bincode_util::deserialize_little(&row.key).unwrap(),
+            value: row.value,
         }
     }
 }
