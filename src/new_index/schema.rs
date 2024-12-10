@@ -17,8 +17,10 @@ use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, atomic, Mutex, RwLock};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
+use threadpool::ThreadPool;
 
 use crate::chain::{
     BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value,
@@ -565,127 +567,125 @@ impl Indexer {
         info!("updating hot addresses");
         let mut hot_addresses = self.store.hot_addresses.write().unwrap();
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
-        let mut height_stats_history_rows = vec![];
-        for (address, latest_update_height) in hot_addresses.iter() {
-            let mut address_tx_history = vec![];
-            let mut got_history = false;
-            let mut last_stats_history: Option<Vec<u8>> = None;
-            let mut last_stats_history_height = 0;
-            if *latest_update_height != best_height {
-                for height in *latest_update_height..=best_height {
-                    let key = HeightStatsHistoryRow::key(address, height);
+        let height_stats_history_rows = Arc::new(Mutex::new(vec![]));
+        let pool = ThreadPool::new(10);
+        let hot_addresses_clone: Vec<_> = hot_addresses.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        for (address, latest_update_height) in hot_addresses_clone {
+            let address_tx_history = Arc::new(RwLock::new(vec![]));
+            let got_history = Arc::new(atomic::AtomicBool::new(false));
+            if latest_update_height != best_height {
+                for height in latest_update_height..=best_height {
+                    let key = HeightStatsHistoryRow::key(&address, height);
                     match self.store.stats_history_db.get(key.as_slice()) {
                         None => {
-                            if !got_history {
-                                address_tx_history = self.store.history_db.iter_scan_from(
-                                    &TxHistoryRow::filter(b'H', address),
-                                    &TxHistoryRow::prefix_height(b'H', address, 0),
-                                )
-                                    .map(TxHistoryRow::from_row)
-                                    .filter_map(|history| {
-                                        let headers = self.store.indexed_headers.read().unwrap();
-                                        self.store
-                                            .txstore_db
-                                            .iter_scan(&TxConfRow::filter(&history.get_txid()[..]))
-                                            .map(TxConfRow::from_row)
-                                            // header_by_blockhash only returns blocks that are part of the best chain,
-                                            // or None for orphaned blocks.
-                                            .filter_map(|conf| {
-                                                headers.header_by_blockhash(&deserialize(&conf.key.blockhash).unwrap())
-                                            })
-                                            .next()
-                                            .map(BlockId::from)
-                                            .filter(|blockid| blockid.height == history.key.confirmed_height as usize)
-                                            .map(|blockid| (history, blockid))
-                                    })
-                                    .collect::<Vec<_>>();
-                                got_history = true;
-                            }
+                            let address_all_tx_history = Arc::clone(&address_tx_history);
+                            let got_history_clone = Arc::clone(&got_history);
+                            let store_clone = Arc::clone(&self.store);
+                            let height_stats_history_rows_clone = height_stats_history_rows.clone();
+                            pool.execute(move || {
+                                if !got_history_clone.load(Ordering::Relaxed) {
+                                    let mut address_tx_history = address_all_tx_history.write().unwrap();
+                                    *address_tx_history = store_clone.history_db.iter_scan_from(
+                                        &TxHistoryRow::filter(b'H', &address),
+                                        &TxHistoryRow::prefix_height(b'H', &address, 0),
+                                    )
+                                        .map(TxHistoryRow::from_row)
+                                        .filter_map(|history| {
+                                            let headers = store_clone.indexed_headers.read().unwrap();
+                                            store_clone
+                                                .txstore_db
+                                                .iter_scan(&TxConfRow::filter(&history.get_txid()[..]))
+                                                .map(TxConfRow::from_row)
+                                                // header_by_blockhash only returns blocks that are part of the best chain,
+                                                // or None for orphaned blocks.
+                                                .filter_map(|conf| {
+                                                    headers.header_by_blockhash(&deserialize(&conf.key.blockhash).unwrap())
+                                                })
+                                                .next()
+                                                .map(BlockId::from)
+                                                .filter(|blockid| blockid.height == history.key.confirmed_height as usize)
+                                                .map(|blockid| (history, blockid))
+                                        })
+                                        .collect::<Vec<_>>();
+                                    got_history_clone.store(true, Ordering::Relaxed);
+                                    drop(address_tx_history);
+                                }
 
-                            let (current_round_tx_history, mut stats) = match &last_stats_history {
-                                None => {
-                                    let current_round_tx_history = address_tx_history
+                                let tx_history = {
+                                    let tx_history_guard = address_all_tx_history.read().unwrap();
+                                    tx_history_guard
                                         .iter()
                                         .filter(|(history, _)| history.key.confirmed_height <= height)
-                                        .collect::<Vec<_>>();
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                };
 
-                                    let stats = ScriptStats::default();
-                                    (current_round_tx_history, stats)
-                                }
-                                Some(last) => {
-                                    let current_round_tx_history = address_tx_history
-                                        .iter()
-                                        .filter(|(history, _)| history.key.confirmed_height > last_stats_history_height && history.key.confirmed_height <= height)
-                                        .collect::<Vec<_>>();
+                                let mut stats = ScriptStats::default();
 
-                                    let stats = bincode_util::deserialize_little::<ScriptStats>(last).unwrap();
-                                    (current_round_tx_history, stats)
-                                }
-                            };
+                                let mut seen_txids = HashSet::new();
+                                let mut lastblock = None;
 
-                            let mut seen_txids = HashSet::new();
-                            let mut lastblock = None;
-
-                            for (history, blockid) in current_round_tx_history {
-                                if lastblock != Some(blockid.hash) {
-                                    seen_txids.clear();
-                                }
-
-                                if seen_txids.insert(history.get_txid()) {
-                                    stats.tx_count += 1;
-                                }
-
-                                match history.key.txinfo {
-                                    #[cfg(not(feature = "liquid"))]
-                                    TxHistoryInfo::Funding(ref info) => {
-                                        stats.funded_txo_count += 1;
-                                        stats.funded_txo_sum += info.value;
+                                for (history, blockid) in tx_history {
+                                    if lastblock != Some(blockid.hash) {
+                                        seen_txids.clear();
                                     }
 
-                                    #[cfg(not(feature = "liquid"))]
-                                    TxHistoryInfo::Spending(ref info) => {
-                                        stats.spent_txo_count += 1;
-                                        stats.spent_txo_sum += info.value;
+                                    if seen_txids.insert(history.get_txid()) {
+                                        stats.tx_count += 1;
                                     }
 
-                                    #[cfg(feature = "liquid")]
-                                    TxHistoryInfo::Funding(_) => {
-                                        stats.funded_txo_count += 1;
+                                    match history.key.txinfo {
+                                        #[cfg(not(feature = "liquid"))]
+                                        TxHistoryInfo::Funding(ref info) => {
+                                            stats.funded_txo_count += 1;
+                                            stats.funded_txo_sum += info.value;
+                                        }
+
+                                        #[cfg(not(feature = "liquid"))]
+                                        TxHistoryInfo::Spending(ref info) => {
+                                            stats.spent_txo_count += 1;
+                                            stats.spent_txo_sum += info.value;
+                                        }
+
+                                        #[cfg(feature = "liquid")]
+                                        TxHistoryInfo::Funding(_) => {
+                                            stats.funded_txo_count += 1;
+                                        }
+
+                                        #[cfg(feature = "liquid")]
+                                        TxHistoryInfo::Spending(_) => {
+                                            stats.spent_txo_count += 1;
+                                        }
+
+                                        #[cfg(feature = "liquid")]
+                                        TxHistoryInfo::Issuing(_)
+                                        | TxHistoryInfo::Burning(_)
+                                        | TxHistoryInfo::Pegin(_)
+                                        | TxHistoryInfo::Pegout(_) => unreachable!(),
                                     }
 
-                                    #[cfg(feature = "liquid")]
-                                    TxHistoryInfo::Spending(_) => {
-                                        stats.spent_txo_count += 1;
-                                    }
-
-                                    #[cfg(feature = "liquid")]
-                                    TxHistoryInfo::Issuing(_)
-                                    | TxHistoryInfo::Burning(_)
-                                    | TxHistoryInfo::Pegin(_)
-                                    | TxHistoryInfo::Pegout(_) => unreachable!(),
+                                    lastblock = Some(blockid.hash);
                                 }
 
-                                lastblock = Some(blockid.hash);
-                            }
-
-                            height_stats_history_rows.push(
-                                HeightStatsHistoryRow::new(
-                                    address,
-                                    height,
-                                    &stats,
-                                ).into_row()
-                            )
+                                height_stats_history_rows_clone
+                                    .lock()
+                                    .unwrap()
+                                    .push(
+                                        HeightStatsHistoryRow::new(
+                                            &address,
+                                            height,
+                                            &stats,
+                                        ).into_row()
+                                    )
+                            })
                         }
-                        Some(history) => {
-                            last_stats_history.replace(history.to_vec());
-                            last_stats_history_height = height;
-                        }
+                        Some(_) => {}
                     }
                 }
             }
         }
 
-        self.store.stats_history_db.write(height_stats_history_rows, self.flush);
+        self.store.stats_history_db.write(height_stats_history_rows.lock().unwrap().clone(), self.flush);
 
         let addresses: Vec<_> = hot_addresses.keys().cloned().collect();
         addresses.into_iter().for_each(|address| {
@@ -2075,7 +2075,7 @@ impl BlockRow {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct FundingInfo {
     pub txid: FullHash,
@@ -2083,7 +2083,7 @@ pub struct FundingInfo {
     pub value: Value,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct SpendingInfo {
     pub txid: FullHash,
@@ -2095,7 +2095,7 @@ pub struct SpendingInfo {
     pub value: Value,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub enum TxHistoryInfo {
     // If a spend and a fund for the same scripthash
@@ -2130,7 +2130,7 @@ impl TxHistoryInfo {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct TxHistoryKey {
     pub code: u8,
@@ -2144,6 +2144,7 @@ pub struct TxHistoryKey {
     pub txinfo: TxHistoryInfo,
 }
 
+#[derive(Clone)]
 pub struct TxHistoryRow {
     pub key: TxHistoryKey,
 }
