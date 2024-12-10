@@ -559,6 +559,7 @@ impl Indexer {
     }
 
     pub fn update_hot_addresses(&self) {
+        info!("updating hot addresses");
         let mut hot_addresses = HOT_ADDRESS.write().unwrap();
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
         let mut height_stats_history_rows = vec![];
@@ -688,6 +689,7 @@ impl Indexer {
             info!("hot address script: {} updated", address.to_hex());
             hot_addresses.insert(address, best_height);
         });
+        info!("hot addresses updated");
     }
 }
 
