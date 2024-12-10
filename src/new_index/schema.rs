@@ -685,6 +685,8 @@ impl Indexer {
             }
         }
 
+        pool.join();
+
         self.store.stats_history_db.write(height_stats_history_rows.lock().unwrap().clone(), self.flush);
 
         let addresses: Vec<_> = hot_addresses.keys().cloned().collect();
