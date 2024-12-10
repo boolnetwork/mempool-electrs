@@ -39,11 +39,6 @@ use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
 use crate::elements::{asset, peg};
 use crate::rest::RELOAD;
 
-lazy_static! {
-    // script_hash: latest_update_block_height
-    pub static ref HOT_ADDRESS: RwLock<HashMap<FullHash, u32>> = RwLock::new(HashMap::new());
-}
-
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
 pub struct Store {
@@ -55,6 +50,7 @@ pub struct Store {
     added_blockhashes: RwLock<HashSet<BlockHash>>,
     indexed_blockhashes: RwLock<HashSet<BlockHash>>,
     indexed_headers: RwLock<HeaderList>,
+    hot_addresses: RwLock<HashMap<FullHash, u32>>
 }
 
 impl Store {
@@ -70,7 +66,7 @@ impl Store {
         let cache_db = DB::open(&path.join("cache"), config);
 
         let stats_history_db = DB::open(&path.join("statshistory"), config);
-        initalize_hot_address(&stats_history_db);
+        let hot_addresses = initalize_hot_address(&stats_history_db);
 
         let headers = if let Some(tip_hash) = txstore_db.get(b"t") {
             let tip_hash = deserialize(&tip_hash).expect("invalid chain tip in `t`");
@@ -93,7 +89,12 @@ impl Store {
             added_blockhashes: RwLock::new(added_blockhashes),
             indexed_blockhashes: RwLock::new(indexed_blockhashes),
             indexed_headers: RwLock::new(headers),
+            hot_addresses: RwLock::new(hot_addresses),
         }
+    }
+
+    pub fn hot_addresses(&self) -> Vec<FullHash> {
+        self.hot_addresses.read().unwrap().keys().cloned().collect()
     }
 
     pub fn reload_store(&self) {
@@ -108,7 +109,7 @@ impl Store {
         let indexed_blockhashes = load_blockhashes(self.history_db(), &BlockRow::done_filter());
         debug!("{} blocks were indexed", indexed_blockhashes.len());
 
-        initalize_hot_address(self.stats_history_db());
+        let hot_addresses = initalize_hot_address(self.stats_history_db());
 
         let headers = if let Some(tip_hash) = self.txstore_db.get(b"t") {
             let tip_hash = deserialize(&tip_hash).expect("invalid chain tip in `t`");
@@ -126,9 +127,11 @@ impl Store {
         let mut added_blockhashes_reload = self.added_blockhashes.write().unwrap();
         let mut indexed_blockhashes_reload = self.indexed_blockhashes.write().unwrap();
         let mut indexed_headers_reload = self.indexed_headers.write().unwrap();
+        let mut hot_addresses_reload = self.hot_addresses.write().unwrap();
         *added_blockhashes_reload = added_blockhashes;
         *indexed_blockhashes_reload = indexed_blockhashes;
         *indexed_headers_reload = headers;
+        *hot_addresses_reload = hot_addresses;
         info!("reload finished");
         let mut reload = RELOAD.write().unwrap();
         *reload = false;
@@ -560,7 +563,7 @@ impl Indexer {
 
     pub fn update_hot_addresses(&self) {
         info!("updating hot addresses");
-        let mut hot_addresses = HOT_ADDRESS.write().unwrap();
+        let mut hot_addresses = self.store.hot_addresses.write().unwrap();
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
         let mut height_stats_history_rows = vec![];
         for (address, latest_update_height) in hot_addresses.iter() {
@@ -1187,7 +1190,7 @@ impl ChainQuery {
     }
 
     pub fn add_hot_address(&self, scripthash: &[u8]) {
-        let mut hot_addresses = HOT_ADDRESS.write().unwrap();
+        let mut hot_addresses = self.store.hot_addresses.write().unwrap();
         let hash = full_hash(scripthash);
         hot_addresses.entry(hash).or_insert(0);
         info!("script: {} added to hot addresses", hash.to_hex());
@@ -1267,7 +1270,7 @@ impl ChainQuery {
         special_height: usize,
     ) -> (ScriptStats, Option<BlockHash>) {
         let _timer = self.start_timer("stats_delta_special_height");
-        let (mut stats, start_height) = if HOT_ADDRESS.read().unwrap().contains_key(scripthash) {
+        let (mut stats, start_height) = if self.store.hot_addresses.read().unwrap().contains_key(scripthash) {
             let height_stats_history_key = HeightStatsHistoryRow::key(scripthash, special_height as u32);
             if let Some(stats) = self.height_stats_history(&height_stats_history_key) {
                 return (stats, self.blockid_by_height(special_height).map(|blockid| blockid.hash));
@@ -1592,11 +1595,8 @@ impl ChainQuery {
     }
 }
 
-fn initalize_hot_address(db: &DB) {
-    let mut hot_addresses = HOT_ADDRESS.write().unwrap();
-    if !hot_addresses.is_empty() {
-        hot_addresses.clear();
-    }
+fn initalize_hot_address(db: &DB) -> HashMap<FullHash, u32> {
+    let mut hot_addresses = HashMap::new();
     let mut db_iter = db.raw_iterator();
     while db_iter.valid() {
         let key = db_iter.key().unwrap();
@@ -1607,6 +1607,7 @@ fn initalize_hot_address(db: &DB) {
         hot_addresses.insert(stats_history_key.scripthash, stats_history_key.confirmed_height);
         db_iter.next();
     }
+    hot_addresses
 }
 
 fn load_blockhashes(db: &DB, prefix: &[u8]) -> HashSet<BlockHash> {
