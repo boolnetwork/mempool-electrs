@@ -962,7 +962,7 @@ fn handle_request(
             Some(script_type @ &"address"),
             Some(script_str),
             Some(&"hot"),
-            Some(cookie),
+            None,
             None,
         )
         | (
@@ -970,7 +970,7 @@ fn handle_request(
             Some(script_type @ &"scripthash"),
             Some(script_str),
             Some(&"hot"),
-            Some(cookie),
+            None,
             None,
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
