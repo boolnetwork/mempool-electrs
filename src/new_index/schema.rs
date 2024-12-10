@@ -66,7 +66,7 @@ impl Store {
         let cache_db = DB::open(&path.join("cache"), config);
 
         let stats_history_db = DB::open(&path.join("statshistory"), config);
-        let hot_addresses = initalize_hot_address(&stats_history_db);
+        let hot_addresses = initialize_hot_address(&stats_history_db);
 
         let headers = if let Some(tip_hash) = txstore_db.get(b"t") {
             let tip_hash = deserialize(&tip_hash).expect("invalid chain tip in `t`");
@@ -109,7 +109,7 @@ impl Store {
         let indexed_blockhashes = load_blockhashes(self.history_db(), &BlockRow::done_filter());
         debug!("{} blocks were indexed", indexed_blockhashes.len());
 
-        let hot_addresses = initalize_hot_address(self.stats_history_db());
+        let hot_addresses = initialize_hot_address(self.stats_history_db());
 
         let headers = if let Some(tip_hash) = self.txstore_db.get(b"t") {
             let tip_hash = deserialize(&tip_hash).expect("invalid chain tip in `t`");
@@ -305,7 +305,7 @@ impl Indexer {
             .collect()
     }
 
-    fn start_auto_compactions(&self, db: &DB) {
+    pub fn start_auto_compactions(&self, db: &DB) {
         let key = b"F".to_vec();
         if db.get(&key).is_none() {
             db.full_compaction();
@@ -1595,18 +1595,13 @@ impl ChainQuery {
     }
 }
 
-fn initalize_hot_address(db: &DB) -> HashMap<FullHash, u32> {
+fn initialize_hot_address(db: &DB) -> HashMap<FullHash, u32> {
     let mut hot_addresses = HashMap::new();
-    let mut db_iter = db.raw_iterator();
-    while db_iter.valid() {
-        let key = db_iter.key().unwrap();
-        if !key.starts_with(b"W") {
-            break;
-        }
-        let stats_history_key: HeightStatsHistoryKey = bincode_util::deserialize_little(key).unwrap();
-        hot_addresses.insert(stats_history_key.scripthash, stats_history_key.confirmed_height);
-        db_iter.next();
-    }
+    db.iter_scan(&HeightStatsHistoryRow::header_filter())
+        .map(HeightStatsHistoryRow::from_row)
+        .for_each(|r| {
+            hot_addresses.insert(r.key.scripthash, r.key.confirmed_height);
+        });
     hot_addresses
 }
 
@@ -2313,6 +2308,10 @@ impl HeightStatsHistoryRow {
 
     fn filter(scripthash: &[u8]) -> Bytes {
         [b"W", scripthash].concat()
+    }
+
+    fn header_filter() -> Bytes {
+        b"W".to_vec()
     }
 
     fn prefix_end(scripthash: &[u8]) -> Bytes {
