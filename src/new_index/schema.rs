@@ -676,7 +676,8 @@ impl Indexer {
                                             height,
                                             &stats,
                                         ).into_row()
-                                    )
+                                    );
+                                info!("script {}, height: {} updated", address.to_hex(), height);
                             })
                         }
                         Some(_) => {}
