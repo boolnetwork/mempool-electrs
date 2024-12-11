@@ -871,6 +871,7 @@ impl Daemon {
                 .chain_err(|| format!("failed to get {} header", blockhash))?;
             blockhash = header.prev_blockhash;
             new_headers.push(header);
+            trace!("header of {} downloaded", header.block_hash());
         }
         trace!("downloaded {} block headers", new_headers.len());
         new_headers.reverse(); // so the tip is the last vector entry
