@@ -94,8 +94,12 @@ impl Store {
         }
     }
 
-    pub fn hot_addresses(&self) -> Vec<FullHash> {
+    pub fn hot_addresses_keys(&self) -> Vec<FullHash> {
         self.hot_addresses.read().unwrap().keys().cloned().collect()
+    }
+
+    fn hot_addresses(&self) -> HashMap<FullHash, u32> {
+        self.hot_addresses.read().unwrap().clone()
     }
 
     pub fn reload_store(&self) {
@@ -564,13 +568,12 @@ impl Indexer {
 
     pub fn update_hot_addresses(&self) {
         info!("updating hot addresses");
-        let mut hot_addresses = self.store.hot_addresses.write().unwrap();
+        let hot_addresses = self.store.hot_addresses();
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
         let headers = Arc::new(self.store.indexed_headers.read().unwrap().clone());
         let height_stats_history_rows = Arc::new(Mutex::new(vec![]));
-        let pool = ThreadPool::new(num_cpus::get()/2);
-        let hot_addresses_clone: Vec<_> = hot_addresses.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        for (address, latest_update_height) in hot_addresses_clone {
+        let pool = ThreadPool::new(num_cpus::get() / 2);
+        for (address, latest_update_height) in hot_addresses.clone() {
             let current_address_updated = Arc::new(RwLock::new(Vec::<HeightStatsHistoryRow>::new()));
             if latest_update_height != best_height {
                 // get all tx history
@@ -607,30 +610,31 @@ impl Indexer {
                             let height_stats_history_rows_clone = height_stats_history_rows.clone();
                             let current_address_updated = current_address_updated.clone();
                             pool.execute(move || {
-                                let (mut stats, tx_history) = match current_address_updated.read().unwrap().iter().rfind(|r| r.key.confirmed_height < height) {
-                                    None => {
-                                        let tx_history = {
-                                            address_all_tx_history
-                                                .iter()
-                                                .filter(|(history, _)| history.key.confirmed_height <= height)
-                                                .cloned()
-                                                .collect::<Vec<_>>()
-                                        };
-                                        (ScriptStats::default(), tx_history)
-                                    }
-                                    Some(prv_record) => {
-                                        let tx_history = {
-                                            address_all_tx_history
-                                                .iter()
-                                                .filter(|(history, _)| history.key.confirmed_height > prv_record.key.confirmed_height && history.key.confirmed_height <= height)
-                                                .cloned()
-                                                .collect::<Vec<_>>()
-                                        };
+                                let (mut stats, tx_history) =
+                                    match current_address_updated.read().unwrap().iter().rfind(|r| r.key.confirmed_height < height) {
+                                        None => {
+                                            let tx_history = {
+                                                address_all_tx_history
+                                                    .iter()
+                                                    .filter(|(history, _)| history.key.confirmed_height <= height)
+                                                    .cloned()
+                                                    .collect::<Vec<_>>()
+                                            };
+                                            (ScriptStats::default(), tx_history)
+                                        }
+                                        Some(prv_record) => {
+                                            let tx_history = {
+                                                address_all_tx_history
+                                                    .iter()
+                                                    .filter(|(history, _)| history.key.confirmed_height > prv_record.key.confirmed_height && history.key.confirmed_height <= height)
+                                                    .cloned()
+                                                    .collect::<Vec<_>>()
+                                            };
 
-                                        let prv_stats = bincode_util::deserialize_little::<ScriptStats>(&prv_record.value).unwrap();
-                                        (prv_stats, tx_history)
-                                    }
-                                };
+                                            let prv_stats = bincode_util::deserialize_little::<ScriptStats>(&prv_record.value).unwrap();
+                                            (prv_stats, tx_history)
+                                        }
+                                    };
 
 
                                 let mut seen_txids = HashSet::new();
@@ -708,10 +712,11 @@ impl Indexer {
 
         self.store.stats_history_db.write(height_stats_history_rows.lock().unwrap().clone(), self.flush);
 
-        let addresses: Vec<_> = hot_addresses.keys().cloned().collect();
+        let addresses: Vec<_> = hot_addresses.keys().collect();
+        let mut hot_addresses_guard = self.store.hot_addresses.write().unwrap();
         addresses.into_iter().for_each(|address| {
             info!("hot address script: {} updated", address.to_hex());
-            hot_addresses.insert(address, best_height);
+            hot_addresses_guard.insert(*address, best_height);
         });
         info!("hot addresses updated");
     }

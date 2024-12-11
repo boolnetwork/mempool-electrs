@@ -194,7 +194,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         );
     }
 
-    let mut last_round_hot_addresses = store.hot_addresses();
+    let mut last_round_hot_addresses = store.hot_addresses_keys();
     loop {
         if let Err(err) = signal.wait(Duration::from_millis(config.main_loop_delay), true) {
             info!("stopping server: {}", err);
@@ -273,7 +273,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         }
         // Update subscribed clients
         //electrum_server.notify();
-        let current_round_hot_addresses = store.hot_addresses();
+        let current_round_hot_addresses = store.hot_addresses_keys();
         if last_round_hot_addresses.ne(&current_round_hot_addresses) {
             indexer.update_hot_addresses();
             last_round_hot_addresses = current_round_hot_addresses.clone()
