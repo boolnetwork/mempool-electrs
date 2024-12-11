@@ -568,7 +568,7 @@ impl Indexer {
         let mut hot_addresses = self.store.hot_addresses.write().unwrap();
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
         let height_stats_history_rows = Arc::new(Mutex::new(vec![]));
-        let pool = ThreadPool::new(10);
+        let pool = ThreadPool::new(num_cpus::get()/2);
         let hot_addresses_clone: Vec<_> = hot_addresses.iter().map(|(k, v)| (k.clone(), *v)).collect();
         for (address, latest_update_height) in hot_addresses_clone {
             let address_tx_history = Arc::new(RwLock::new(vec![]));
