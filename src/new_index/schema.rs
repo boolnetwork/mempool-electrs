@@ -17,8 +17,7 @@ use rayon::prelude::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
-use std::sync::{Arc, atomic, Mutex, RwLock};
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use threadpool::ThreadPool;
 
@@ -567,57 +566,51 @@ impl Indexer {
         info!("updating hot addresses");
         let mut hot_addresses = self.store.hot_addresses.write().unwrap();
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
+        let headers = Arc::new(self.store.indexed_headers.read().unwrap().clone());
         let height_stats_history_rows = Arc::new(Mutex::new(vec![]));
         let pool = ThreadPool::new(num_cpus::get()/2);
         let hot_addresses_clone: Vec<_> = hot_addresses.iter().map(|(k, v)| (k.clone(), *v)).collect();
         for (address, latest_update_height) in hot_addresses_clone {
-            let address_tx_history = Arc::new(RwLock::new(vec![]));
-            let got_history = Arc::new(atomic::AtomicBool::new(false));
             let current_address_updated = Arc::new(RwLock::new(Vec::<HeightStatsHistoryRow>::new()));
             if latest_update_height != best_height {
+                // get all tx history
+                // todo should only get the necessary part (not matter much?)
+                let address_tx_history = Arc::new(
+                    self.store.history_db.iter_scan_from(
+                        &TxHistoryRow::filter(b'H', &address),
+                        &TxHistoryRow::prefix_height(b'H', &address, 0),
+                    )
+                        .map(TxHistoryRow::from_row)
+                        .filter_map(|history| {
+                            self.store
+                                .txstore_db
+                                .iter_scan(&TxConfRow::filter(&history.get_txid()[..]))
+                                .map(TxConfRow::from_row)
+                                // header_by_blockhash only returns blocks that are part of the best chain,
+                                // or None for orphaned blocks.
+                                .filter_map(|conf| {
+                                    headers.header_by_blockhash(&deserialize(&conf.key.blockhash).unwrap())
+                                })
+                                .next()
+                                .map(BlockId::from)
+                                .filter(|blockid| blockid.height == history.key.confirmed_height as usize)
+                                .map(|blockid| (history, blockid))
+                        })
+                        .collect::<Vec<_>>()
+                );
+
                 for height in latest_update_height..=best_height {
                     let key = HeightStatsHistoryRow::key(&address, height);
                     match self.store.stats_history_db.get(key.as_slice()) {
                         None => {
                             let address_all_tx_history = Arc::clone(&address_tx_history);
-                            let got_history_clone = Arc::clone(&got_history);
-                            let store_clone = Arc::clone(&self.store);
                             let height_stats_history_rows_clone = height_stats_history_rows.clone();
                             let current_address_updated = current_address_updated.clone();
                             pool.execute(move || {
-                                if !got_history_clone.swap(true, Ordering::Relaxed) {
-                                    let mut address_tx_history = address_all_tx_history.write().unwrap();
-                                    *address_tx_history = store_clone.history_db.iter_scan_from(
-                                        &TxHistoryRow::filter(b'H', &address),
-                                        &TxHistoryRow::prefix_height(b'H', &address, 0),
-                                    )
-                                        .map(TxHistoryRow::from_row)
-                                        .filter_map(|history| {
-                                            let headers = store_clone.indexed_headers.read().unwrap();
-                                            store_clone
-                                                .txstore_db
-                                                .iter_scan(&TxConfRow::filter(&history.get_txid()[..]))
-                                                .map(TxConfRow::from_row)
-                                                // header_by_blockhash only returns blocks that are part of the best chain,
-                                                // or None for orphaned blocks.
-                                                .filter_map(|conf| {
-                                                    headers.header_by_blockhash(&deserialize(&conf.key.blockhash).unwrap())
-                                                })
-                                                .next()
-                                                .map(BlockId::from)
-                                                .filter(|blockid| blockid.height == history.key.confirmed_height as usize)
-                                                .map(|blockid| (history, blockid))
-                                        })
-                                        .collect::<Vec<_>>();
-                                    info!("script: {}, tx_history len: {}", address.to_hex(), address_tx_history.len());
-                                    drop(address_tx_history);
-                                }
-
                                 let (mut stats, tx_history) = match current_address_updated.read().unwrap().iter().rfind(|r| r.key.confirmed_height < height) {
                                     None => {
                                         let tx_history = {
-                                            let tx_history_guard = address_all_tx_history.read().unwrap();
-                                            tx_history_guard
+                                            address_all_tx_history
                                                 .iter()
                                                 .filter(|(history, _)| history.key.confirmed_height <= height)
                                                 .cloned()
@@ -627,8 +620,7 @@ impl Indexer {
                                     }
                                     Some(prv_record) => {
                                         let tx_history = {
-                                            let tx_history_guard = address_all_tx_history.read().unwrap();
-                                            tx_history_guard
+                                            address_all_tx_history
                                                 .iter()
                                                 .filter(|(history, _)| history.key.confirmed_height > prv_record.key.confirmed_height && history.key.confirmed_height <= height)
                                                 .cloned()
