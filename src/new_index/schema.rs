@@ -52,7 +52,7 @@ pub struct Store {
     added_blockhashes: RwLock<HashSet<BlockHash>>,
     indexed_blockhashes: RwLock<HashSet<BlockHash>>,
     indexed_headers: RwLock<HeaderList>,
-    hot_addresses: RwLock<HashMap<FullHash, u32>>
+    hot_addresses: RwLock<HashMap<FullHash, u32>>,
 }
 
 impl Store {
@@ -377,7 +377,7 @@ impl Indexer {
         if tip != *headers.tip() {
             return Err(Error::from_kind(
                 ErrorKind::UpdateError("header not matched".to_string())
-            ))
+            ));
         }
 
         if let FetchFrom::BlkFiles = self.from {
@@ -436,7 +436,7 @@ impl Indexer {
         if tip != *headers.tip() {
             return Err(Error::from_kind(
                 ErrorKind::UpdateError("header not matched".to_string())
-            ))
+            ));
         }
 
         if let FetchFrom::BlkFiles = self.from {
@@ -573,6 +573,7 @@ impl Indexer {
         for (address, latest_update_height) in hot_addresses_clone {
             let address_tx_history = Arc::new(RwLock::new(vec![]));
             let got_history = Arc::new(atomic::AtomicBool::new(false));
+            let current_address_updated = Arc::new(RwLock::new(Vec::<HeightStatsHistoryRow>::new()));
             if latest_update_height != best_height {
                 for height in latest_update_height..=best_height {
                     let key = HeightStatsHistoryRow::key(&address, height);
@@ -582,8 +583,9 @@ impl Indexer {
                             let got_history_clone = Arc::clone(&got_history);
                             let store_clone = Arc::clone(&self.store);
                             let height_stats_history_rows_clone = height_stats_history_rows.clone();
+                            let current_address_updated = current_address_updated.clone();
                             pool.execute(move || {
-                                if !got_history_clone.swap(true,Ordering::Relaxed) {
+                                if !got_history_clone.swap(true, Ordering::Relaxed) {
                                     let mut address_tx_history = address_all_tx_history.write().unwrap();
                                     *address_tx_history = store_clone.history_db.iter_scan_from(
                                         &TxHistoryRow::filter(b'H', &address),
@@ -611,16 +613,33 @@ impl Indexer {
                                     drop(address_tx_history);
                                 }
 
-                                let tx_history = {
-                                    let tx_history_guard = address_all_tx_history.read().unwrap();
-                                    tx_history_guard
-                                        .iter()
-                                        .filter(|(history, _)| history.key.confirmed_height <= height)
-                                        .cloned()
-                                        .collect::<Vec<_>>()
+                                let (mut stats, tx_history) = match current_address_updated.read().unwrap().iter().rfind(|r| r.key.confirmed_height < height) {
+                                    None => {
+                                        let tx_history = {
+                                            let tx_history_guard = address_all_tx_history.read().unwrap();
+                                            tx_history_guard
+                                                .iter()
+                                                .filter(|(history, _)| history.key.confirmed_height <= height)
+                                                .cloned()
+                                                .collect::<Vec<_>>()
+                                        };
+                                        (ScriptStats::default(), tx_history)
+                                    }
+                                    Some(prv_record) => {
+                                        let tx_history = {
+                                            let tx_history_guard = address_all_tx_history.read().unwrap();
+                                            tx_history_guard
+                                                .iter()
+                                                .filter(|(history, _)| history.key.confirmed_height > prv_record.key.confirmed_height && history.key.confirmed_height <= height)
+                                                .cloned()
+                                                .collect::<Vec<_>>()
+                                        };
+
+                                        let prv_stats = bincode_util::deserialize_little::<ScriptStats>(&prv_record.value).unwrap();
+                                        (prv_stats, tx_history)
+                                    }
                                 };
 
-                                let mut stats = ScriptStats::default();
 
                                 let mut seen_txids = HashSet::new();
                                 let mut lastblock = None;
@@ -667,16 +686,24 @@ impl Indexer {
                                     lastblock = Some(blockid.hash);
                                 }
 
+                                let record = HeightStatsHistoryRow::new(
+                                    &address,
+                                    height,
+                                    &stats,
+                                );
+
+                                let mut current_address_updated = current_address_updated.write().unwrap();
+                                if current_address_updated.len() >= 100 {
+                                    current_address_updated.sort_by(|r1, r2| r1.key.confirmed_height.cmp(&r2.key.confirmed_height));
+                                    current_address_updated.remove(0);
+                                }
+                                current_address_updated.push(record.clone());
+                                drop(current_address_updated);
+
                                 height_stats_history_rows_clone
                                     .lock()
                                     .unwrap()
-                                    .push(
-                                        HeightStatsHistoryRow::new(
-                                            &address,
-                                            height,
-                                            &stats,
-                                        ).into_row()
-                                    );
+                                    .push(record.into_row());
                                 info!("script {}, height: {} updated", address.to_hex(), height);
                             })
                         }
@@ -1281,10 +1308,10 @@ impl ChainQuery {
             if let Some(stats_row) = self.height_stats_history_iter_scan_reverse(scripthash).next() {
                 let next_stats_history = HeightStatsHistoryRow::from_row(stats_row);
                 (bincode_util::deserialize_little(&next_stats_history.value).unwrap(), next_stats_history.key.confirmed_height as usize)
-            }else {
+            } else {
                 (init_stats, 0)
             }
-        }else {
+        } else {
             (init_stats, 0)
         };
 
@@ -2284,13 +2311,14 @@ impl TxEdgeRow {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct HeightStatsHistoryKey {
     code: u8,
     scripthash: FullHash,
     confirmed_height: u32,
 }
 
+#[derive(Clone)]
 struct HeightStatsHistoryRow {
     key: HeightStatsHistoryKey,
     value: Bytes,
