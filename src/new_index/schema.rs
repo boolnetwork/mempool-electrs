@@ -608,6 +608,7 @@ impl Indexer {
                                         })
                                         .collect::<Vec<_>>();
                                     got_history_clone.store(true, Ordering::Relaxed);
+                                    info!("script: {}, tx_history len: {}", address.to_hex(), address_tx_history.len());
                                     drop(address_tx_history);
                                 }
 
