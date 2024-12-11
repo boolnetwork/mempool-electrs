@@ -583,7 +583,7 @@ impl Indexer {
                             let store_clone = Arc::clone(&self.store);
                             let height_stats_history_rows_clone = height_stats_history_rows.clone();
                             pool.execute(move || {
-                                if !got_history_clone.load(Ordering::Relaxed) {
+                                if !got_history_clone.swap(true,Ordering::Relaxed) {
                                     let mut address_tx_history = address_all_tx_history.write().unwrap();
                                     *address_tx_history = store_clone.history_db.iter_scan_from(
                                         &TxHistoryRow::filter(b'H', &address),
@@ -607,7 +607,6 @@ impl Indexer {
                                                 .map(|blockid| (history, blockid))
                                         })
                                         .collect::<Vec<_>>();
-                                    got_history_clone.store(true, Ordering::Relaxed);
                                     info!("script: {}, tx_history len: {}", address.to_hex(), address_tx_history.len());
                                     drop(address_tx_history);
                                 }
