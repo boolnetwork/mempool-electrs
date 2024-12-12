@@ -576,12 +576,23 @@ impl Indexer {
         for (address, latest_update_height) in hot_addresses.clone() {
             let current_address_updated = Arc::new(RwLock::new(Vec::<HeightStatsHistoryRow>::new()));
             if latest_update_height != best_height {
+                if latest_update_height > 0 {
+                    // get the latest record
+                    let latest_key = HeightStatsHistoryRow::key(&address, latest_update_height);
+                    let record = self.store.stats_history_db.get(&latest_key).unwrap();
+                    current_address_updated.write().unwrap().push(
+                        HeightStatsHistoryRow {
+                            key: bincode_util::deserialize_little(&latest_key).unwrap(),
+                            value: record,
+                        });
+                }
+
                 // get all tx history
                 // todo should only get the necessary part (not matter much?)
                 let address_tx_history = Arc::new(
                     self.store.history_db.iter_scan_from(
                         &TxHistoryRow::filter(b'H', &address),
-                        &TxHistoryRow::prefix_height(b'H', &address, 0),
+                        &TxHistoryRow::prefix_height(b'H', &address, latest_update_height),
                     )
                         .map(TxHistoryRow::from_row)
                         .filter_map(|history| {
@@ -602,108 +613,103 @@ impl Indexer {
                         .collect::<Vec<_>>()
                 );
 
-                for height in latest_update_height..=best_height {
-                    let key = HeightStatsHistoryRow::key(&address, height);
-                    match self.store.stats_history_db.get(key.as_slice()) {
-                        None => {
-                            let address_all_tx_history = Arc::clone(&address_tx_history);
-                            let height_stats_history_rows_clone = height_stats_history_rows.clone();
-                            let current_address_updated = current_address_updated.clone();
-                            pool.execute(move || {
-                                let (mut stats, tx_history) =
-                                    match current_address_updated.read().unwrap().iter().rfind(|r| r.key.confirmed_height < height) {
-                                        None => {
-                                            let tx_history = {
-                                                address_all_tx_history
-                                                    .iter()
-                                                    .filter(|(history, _)| history.key.confirmed_height <= height)
-                                                    .cloned()
-                                                    .collect::<Vec<_>>()
-                                            };
-                                            (ScriptStats::default(), tx_history)
-                                        }
-                                        Some(prv_record) => {
-                                            let tx_history = {
-                                                address_all_tx_history
-                                                    .iter()
-                                                    .filter(|(history, _)| history.key.confirmed_height > prv_record.key.confirmed_height && history.key.confirmed_height <= height)
-                                                    .cloned()
-                                                    .collect::<Vec<_>>()
-                                            };
+                let start_update_height = if latest_update_height == 0 { latest_update_height } else { latest_update_height + 1 };
 
-                                            let prv_stats = bincode_util::deserialize_little::<ScriptStats>(&prv_record.value).unwrap();
-                                            (prv_stats, tx_history)
-                                        }
+                for height in start_update_height..=best_height {
+                    let address_all_tx_history = Arc::clone(&address_tx_history);
+                    let height_stats_history_rows_clone = height_stats_history_rows.clone();
+                    let current_address_updated = current_address_updated.clone();
+                    pool.execute(move || {
+                        let (mut stats, tx_history) =
+                            match current_address_updated.read().unwrap().iter().rfind(|r| r.key.confirmed_height < height) {
+                                None => {
+                                    let tx_history = {
+                                        address_all_tx_history
+                                            .iter()
+                                            .filter(|(history, _)| history.key.confirmed_height <= height)
+                                            .cloned()
+                                            .collect::<Vec<_>>()
+                                    };
+                                    (ScriptStats::default(), tx_history)
+                                }
+                                Some(prv_record) => {
+                                    let tx_history = {
+                                        address_all_tx_history
+                                            .iter()
+                                            .filter(|(history, _)| history.key.confirmed_height > prv_record.key.confirmed_height && history.key.confirmed_height <= height)
+                                            .cloned()
+                                            .collect::<Vec<_>>()
                                     };
 
+                                    let prv_stats = bincode_util::deserialize_little::<ScriptStats>(&prv_record.value).unwrap();
+                                    (prv_stats, tx_history)
+                                }
+                            };
 
-                                let mut seen_txids = HashSet::new();
-                                let mut lastblock = None;
+                        let mut seen_txids = HashSet::new();
+                        let mut lastblock = None;
 
-                                for (history, blockid) in tx_history {
-                                    if lastblock != Some(blockid.hash) {
-                                        seen_txids.clear();
-                                    }
+                        for (history, blockid) in tx_history {
+                            if lastblock != Some(blockid.hash) {
+                                seen_txids.clear();
+                            }
 
-                                    if seen_txids.insert(history.get_txid()) {
-                                        stats.tx_count += 1;
-                                    }
+                            if seen_txids.insert(history.get_txid()) {
+                                stats.tx_count += 1;
+                            }
 
-                                    match history.key.txinfo {
-                                        #[cfg(not(feature = "liquid"))]
-                                        TxHistoryInfo::Funding(ref info) => {
-                                            stats.funded_txo_count += 1;
-                                            stats.funded_txo_sum += info.value;
-                                        }
-
-                                        #[cfg(not(feature = "liquid"))]
-                                        TxHistoryInfo::Spending(ref info) => {
-                                            stats.spent_txo_count += 1;
-                                            stats.spent_txo_sum += info.value;
-                                        }
-
-                                        #[cfg(feature = "liquid")]
-                                        TxHistoryInfo::Funding(_) => {
-                                            stats.funded_txo_count += 1;
-                                        }
-
-                                        #[cfg(feature = "liquid")]
-                                        TxHistoryInfo::Spending(_) => {
-                                            stats.spent_txo_count += 1;
-                                        }
-
-                                        #[cfg(feature = "liquid")]
-                                        TxHistoryInfo::Issuing(_)
-                                        | TxHistoryInfo::Burning(_)
-                                        | TxHistoryInfo::Pegin(_)
-                                        | TxHistoryInfo::Pegout(_) => unreachable!(),
-                                    }
-
-                                    lastblock = Some(blockid.hash);
+                            match history.key.txinfo {
+                                #[cfg(not(feature = "liquid"))]
+                                TxHistoryInfo::Funding(ref info) => {
+                                    stats.funded_txo_count += 1;
+                                    stats.funded_txo_sum += info.value;
                                 }
 
-                                let record = HeightStatsHistoryRow::new(
-                                    &address,
-                                    height,
-                                    &stats,
-                                );
-
-                                let mut current_address_updated = current_address_updated.write().unwrap();
-                                if current_address_updated.len() >= 100 {
-                                    current_address_updated.sort_by(|r1, r2| r1.key.confirmed_height.cmp(&r2.key.confirmed_height));
-                                    current_address_updated.remove(0);
+                                #[cfg(not(feature = "liquid"))]
+                                TxHistoryInfo::Spending(ref info) => {
+                                    stats.spent_txo_count += 1;
+                                    stats.spent_txo_sum += info.value;
                                 }
-                                current_address_updated.push(record.clone());
-                                drop(current_address_updated);
 
-                                height_stats_history_rows_clone
-                                    .lock()
-                                    .unwrap()
-                                    .push(record.into_row());
-                            })
+                                #[cfg(feature = "liquid")]
+                                TxHistoryInfo::Funding(_) => {
+                                    stats.funded_txo_count += 1;
+                                }
+
+                                #[cfg(feature = "liquid")]
+                                TxHistoryInfo::Spending(_) => {
+                                    stats.spent_txo_count += 1;
+                                }
+
+                                #[cfg(feature = "liquid")]
+                                TxHistoryInfo::Issuing(_)
+                                | TxHistoryInfo::Burning(_)
+                                | TxHistoryInfo::Pegin(_)
+                                | TxHistoryInfo::Pegout(_) => unreachable!(),
+                            }
+
+                            lastblock = Some(blockid.hash);
                         }
-                        Some(_) => {}
-                    }
+
+                        let record = HeightStatsHistoryRow::new(
+                            &address,
+                            height,
+                            &stats,
+                        );
+
+                        let mut current_address_updated = current_address_updated.write().unwrap();
+                        if current_address_updated.len() >= 100 {
+                            current_address_updated.sort_by(|r1, r2| r1.key.confirmed_height.cmp(&r2.key.confirmed_height));
+                            current_address_updated.remove(0);
+                        }
+                        current_address_updated.push(record.clone());
+                        drop(current_address_updated);
+
+                        height_stats_history_rows_clone
+                            .lock()
+                            .unwrap()
+                            .push(record.into_row());
+                    })
                 }
             }
         }
