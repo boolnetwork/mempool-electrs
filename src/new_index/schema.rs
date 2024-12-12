@@ -582,12 +582,13 @@ impl Indexer {
                 if latest_update_height > 0 {
                     // get the latest record
                     let latest_key = HeightStatsHistoryRow::key(&address, latest_update_height);
-                    let record = self.store.stats_history_db.get(&latest_key).unwrap();
-                    current_address_updated.write().unwrap().push(
-                        HeightStatsHistoryRow {
-                            key: bincode_util::deserialize_little(&latest_key).unwrap(),
-                            value: record,
-                        });
+                    if let Some(record) = self.store.stats_history_db.get(&latest_key) {
+                        current_address_updated.write().unwrap().push(
+                            HeightStatsHistoryRow {
+                                key: bincode_util::deserialize_little(&latest_key).unwrap(),
+                                value: record,
+                            });
+                    }
                 }
 
                 let total_count = best_height - latest_update_height;
