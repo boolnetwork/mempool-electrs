@@ -18,6 +18,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use threadpool::ThreadPool;
 
@@ -572,6 +573,8 @@ impl Indexer {
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
         let headers = Arc::new(self.store.indexed_headers.read().unwrap().clone());
         let height_stats_history_rows = Arc::new(Mutex::new(vec![]));
+        let progress = Arc::new(AtomicUsize::new(0));
+        let last_logged_percentage = Arc::new(AtomicUsize::new(0));
         let pool = ThreadPool::new(num_cpus::get() / 2);
         for (address, latest_update_height) in hot_addresses.clone() {
             let current_address_updated = Arc::new(RwLock::new(Vec::<HeightStatsHistoryRow>::new()));
@@ -586,6 +589,8 @@ impl Indexer {
                             value: record,
                         });
                 }
+
+                let total_count = best_height - latest_update_height;
 
                 // get all tx history
                 // todo should only get the necessary part (not matter much?)
@@ -619,6 +624,8 @@ impl Indexer {
                     let address_all_tx_history = Arc::clone(&address_tx_history);
                     let height_stats_history_rows_clone = height_stats_history_rows.clone();
                     let current_address_updated = current_address_updated.clone();
+                    let progress_clone = Arc::clone(&progress);
+                    let last_logged_percentage_clone = Arc::clone(&last_logged_percentage);
                     pool.execute(move || {
                         let (mut stats, tx_history) =
                             match current_address_updated.read().unwrap().iter().rfind(|r| r.key.confirmed_height < height) {
@@ -709,6 +716,14 @@ impl Indexer {
                             .lock()
                             .unwrap()
                             .push(record.into_row());
+
+                        let prev_progress = progress_clone.fetch_add(1, Ordering::Relaxed);
+                        let percentage = (prev_progress + 1) * 100 / total_count as usize;
+                        let last_logged = last_logged_percentage_clone.load(Ordering::Relaxed);
+                        if percentage > last_logged && percentage % 1 == 0 {
+                            last_logged_percentage_clone.store(percentage, Ordering::Relaxed);
+                            info!("Progress {}: {}% completed", address.to_hex(), percentage);
+                        }
                     })
                 }
             }
