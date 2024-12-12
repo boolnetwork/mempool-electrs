@@ -573,11 +573,11 @@ impl Indexer {
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
         let headers = Arc::new(self.store.indexed_headers.read().unwrap().clone());
         let height_stats_history_rows = Arc::new(Mutex::new(vec![]));
-        let progress = Arc::new(AtomicUsize::new(0));
-        let last_logged_percentage = Arc::new(AtomicUsize::new(0));
         let pool = ThreadPool::new(num_cpus::get() / 2);
         for (address, latest_update_height) in hot_addresses.clone() {
             let current_address_updated = Arc::new(RwLock::new(Vec::<HeightStatsHistoryRow>::new()));
+            let progress = Arc::new(AtomicUsize::new(0));
+            let last_logged_percentage = Arc::new(AtomicUsize::new(0));
             if latest_update_height != best_height {
                 if latest_update_height > 0 {
                     // get the latest record
