@@ -709,7 +709,8 @@ impl Indexer {
         }
 
         pool.join();
-
+        // check if effective in sgx
+        drop(pool);
         self.store.stats_history_db.write(height_stats_history_rows.lock().unwrap().clone(), self.flush);
 
         let addresses: Vec<_> = hot_addresses.keys().collect();
