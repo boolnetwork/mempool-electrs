@@ -20,7 +20,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
-use threadpool::ThreadPool;
 
 use crate::chain::{
     BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value,
@@ -40,6 +39,7 @@ use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
 #[cfg(feature = "liquid")]
 use crate::elements::{asset, peg};
 use crate::rest::RELOAD;
+use crate::util::thread_pool::SimpleThreadPool;
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
@@ -573,7 +573,7 @@ impl Indexer {
         let best_height = (self.store.indexed_headers.read().unwrap().len() - 1) as u32;
         let headers = Arc::new(self.store.indexed_headers.read().unwrap().clone());
         let height_stats_history_rows = Arc::new(Mutex::new(vec![]));
-        let pool = ThreadPool::new(num_cpus::get() / 2);
+        let pool = SimpleThreadPool::new(num_cpus::get() / 2);
         for (address, latest_update_height) in hot_addresses.clone() {
             let current_address_updated = Arc::new(RwLock::new(Vec::<HeightStatsHistoryRow>::new()));
             let progress = Arc::new(AtomicUsize::new(0));
@@ -730,8 +730,7 @@ impl Indexer {
         }
 
         pool.join();
-        // check if effective in sgx
-        drop(pool);
+
         self.store.stats_history_db.write(height_stats_history_rows.lock().unwrap().clone(), self.flush);
 
         let addresses: Vec<_> = hot_addresses.keys().collect();

@@ -5,6 +5,7 @@ mod transaction;
 pub mod bincode_util;
 pub mod electrum_merkle;
 pub mod fees;
+pub mod thread_pool;
 
 pub use self::block::{
     parse_aux_block, BlockHeaderMeta, BlockId, BlockMeta, BlockStatus, HeaderEntry, HeaderList,
