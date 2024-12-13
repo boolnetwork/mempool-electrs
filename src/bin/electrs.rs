@@ -75,22 +75,66 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                     break;
                 }
                 Err(err) => {
-                    if err
-                        .to_string()
-                        .contains("failed to get blocks from bitcoind")
-                    {
-                        error!("{err}");
-                    } else {
-                        return Err(err);
+                    match err {
+                        Error(ErrorKind::UpdateError(msg), _) => {
+                            error!("{}", msg);
+                            store.reload_store();
+                        }
+                        _ => {
+                            if err
+                                .to_string()
+                                .contains("failed to get blocks from bitcoind")
+                            {
+                                error!("{err}");
+                            } else {
+                                return Err(err);
+                            }
+                        }
                     }
                 }
             }
         }
     } else {
-        tip.replace(indexer.update(&daemon)?);
+        loop {
+            match indexer.update(&daemon) {
+                Ok(hash) => {
+                    tip.replace(hash);
+                    break;
+                },
+                Err(err) => {
+                    match err {
+                        Error(ErrorKind::UpdateError(msg), _) => {
+                            error!("{}", msg);
+                            store.reload_store();
+                        }
+                        _ => {
+                            return Err(err)
+                        }
+                    }
+                }
+            };
+        }
     };
     #[cfg(feature = "liquid")]
-    tip.replace(indexer.update(&daemon)?);
+    loop {
+        match indexer.update(&daemon) {
+            Ok(hash) => {
+                tip.replace(hash);
+                break;
+            },
+            Err(err) => {
+                match err {
+                    Error(ErrorKind::UpdateError(msg), _) => {
+                        error!("{}", msg);
+                        store.reload_store();
+                    }
+                    _ => {
+                        return Err(err)
+                    }
+                }
+            }
+        };
+    }
 
     let mut tip = tip.unwrap();
 
@@ -106,6 +150,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         &metrics,
         Arc::clone(&config),
     )));
+
     loop {
         match Mempool::update(&mempool, &daemon) {
             Ok(_) => break,
@@ -139,14 +184,17 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     let rest_server = rest::start(Arc::clone(&config), Arc::clone(&query), &metrics);
     //let electrum_server = ElectrumRPC::start(Arc::clone(&config), Arc::clone(&query), &metrics);
 
-    if let Some(ref precache_file) = config.precache_scripts {
-        let precache_scripthashes = precache::scripthashes_from_file(precache_file.to_string())
-            .expect("cannot load scripts to precache");
-        precache::precache(
-            Arc::clone(&chain),
-            precache_scripthashes,
-            config.precache_threads,
-        );
+    // not allowed when using sgx
+    if !config.sgx_enable {
+        if let Some(ref precache_file) = config.precache_scripts {
+            let precache_scripthashes = precache::scripthashes_from_file(precache_file.to_string())
+                .expect("cannot load scripts to precache");
+            precache::precache(
+                Arc::clone(&chain),
+                precache_scripthashes,
+                config.precache_threads,
+            );
+        }
     }
 
     loop {
@@ -174,8 +222,47 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         // Index new blocks
         let current_tip = daemon.getbestblockhash()?;
         if current_tip != tip {
-            indexer.update(&daemon)?;
-            tip = current_tip;
+            if config.sgx_enable {
+                match indexer.sgx_update(&daemon) {
+                    Ok(_block_hash) => {
+                        tip = current_tip;
+                    }
+                    Err(err) => {
+                        match err {
+                            Error(ErrorKind::UpdateError(msg), _) => {
+                                error!("{}", msg);
+                                store.reload_store();
+                            }
+                            _ => {
+                                if err
+                                    .to_string()
+                                    .contains("failed to get blocks from bitcoind")
+                                {
+                                    error!("{err}");
+                                } else {
+                                    return Err(err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }else {
+                match indexer.update(&daemon) {
+                    Ok(_hash) => {},
+                    Err(err) => {
+                        match err {
+                            Error(ErrorKind::UpdateError(msg), _) => {
+                                error!("{}", msg);
+                                store.reload_store();
+                            }
+                            _ => {
+                                return Err(err)
+                            }
+                        }
+                    }
+                };
+                tip = current_tip;
+            }
         };
 
         // Update mempool

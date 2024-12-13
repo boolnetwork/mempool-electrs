@@ -29,6 +29,11 @@ error_chain! {
             display("SGX error: {}", msg)
         }
 
+        UpdateError(msg: String) {
+            description("Some error returns when updating.")
+            display("Update error: {}", msg)
+        }
+
         #[cfg(feature = "electrum-discovery")]
         ElectrumClient(e: electrum_client::Error) {
             description("Electrum client error")
