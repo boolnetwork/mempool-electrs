@@ -275,11 +275,11 @@ pub fn index(
                     Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => {
                         daemon
                             .get_blocks_has_aux(&blockhashes)
-                            .expect("failed to get blocks from bitcoind")
+                            .map_err(| err| format!("failed to get blocks from bitcoind: {}", err))?
                     }
                     _ => daemon
                         .getblocks(&blockhashes)
-                        .expect("failed to get blocks from bitcoind"),
+                        .map_err(| err| format!("failed to get blocks from bitcoind: {}", err))?,
                 };
 
                 #[cfg(feature = "liquid")]

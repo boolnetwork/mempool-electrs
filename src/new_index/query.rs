@@ -137,11 +137,8 @@ impl Query {
         &self,
         scripthash: &[u8],
         specific_height: usize,
-    ) -> (ScriptStats, ScriptStats) {
-        (
-            self.chain.stats_limit_height(scripthash, specific_height),
-            self.mempool().stats(scripthash),
-        )
+    ) -> ScriptStats {
+        self.chain.stats_limit_height(scripthash, specific_height, super::db::DBFlush::Enable)
     }
 
     pub fn lookup_txn(&self, txid: &Txid) -> Option<Transaction> {

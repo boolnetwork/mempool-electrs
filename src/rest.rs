@@ -40,10 +40,14 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::num::ParseIntError;
 use std::os::unix::fs::FileTypeExt;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use sha2::{Digest, Sha256};
 use url::form_urlencoded;
+
+lazy_static! {
+    pub static ref RELOAD: Arc<RwLock<bool>> = std::sync::Arc::new(RwLock::new(false));
+}
 
 const ADDRESS_SEARCH_LIMIT: usize = 10;
 
@@ -245,11 +249,8 @@ impl TxInValue {
 
         let innerscripts = prevout.map(|prevout| get_innerscripts(txin, prevout));
 
-        let prevout = if let Some(prevout) = prevout {
-            Some(TxOutValue::new(prevout, config))
-        } else {
-            None
-        };
+        let prevout = prevout.map(|prevout| TxOutValue::new(prevout, config));
+
 
         TxInValue {
             txid: txin.previous_output.txid,
@@ -600,22 +601,36 @@ async fn run_server(
 
     let config = Arc::clone(&config);
     let query = Arc::clone(&query);
+    let reload = Arc::clone(&RELOAD);
 
     let make_service_fn_inn = || {
         let query = Arc::clone(&query);
         let config = Arc::clone(&config);
         let metric = metric.clone();
+        let reload = Arc::clone(&reload);
 
         async move {
             Ok::<_, hyper::Error>(service_fn(move |req| {
                 let query = Arc::clone(&query);
                 let config = Arc::clone(&config);
                 let timer = metric.with_label_values(&["all_methods"]).start_timer();
-
+                let reload = Arc::clone(&reload);
                 async move {
                     let method = req.method().clone();
                     let uri = req.uri().clone();
                     let body = hyper::body::to_bytes(req.into_body()).await?;
+
+                    let reload = reload.read().unwrap();
+                    if *reload /*state.stop*/ {
+                        return Ok::<_, hyper::Error>(
+                            Response::builder()
+                                .status(StatusCode::SERVICE_UNAVAILABLE)
+                                .header("Content-Type", "text/plain")
+                                .header("X-Powered-By", &**VERSION_STRING)
+                                .body(Body::from("Server reloading".to_string()))
+                                .unwrap()
+                        );
+                    }
 
                     let mut resp = tokio::task::block_in_place(|| {
                         handle_request(method, uri, body, &query, &config)
@@ -950,8 +965,7 @@ fn handle_request(
             json_response(
                 json!({
                     *script_type: script_str,
-                    "chain_stats": stats.0,
-                    "mempool_stats": stats.1,
+                    "chain_stats": stats,
                 }),
                 TTL_SHORT,
                 config.sgx_enable,
