@@ -148,6 +148,14 @@ impl Query {
         self.chain.add_hot_address(scripthash)
     }
 
+    pub fn rollback_stats(
+        &self,
+        scripthash: &[u8],
+        to_height: u32,
+    ) {
+        self.chain.rollback_stats(scripthash, to_height)
+    }
+
     pub fn lookup_txn(&self, txid: &Txid) -> Option<Transaction> {
         self.chain
             .lookup_txn(txid, None)

@@ -23,7 +23,7 @@ use tokio::sync::oneshot;
 use dogecoin::network::constants::Network as DNetwork;
 
 use hyperlocal::UnixServerExt;
-use std::{cmp, fs};
+use std::{cmp, fs, u32};
 #[cfg(feature = "liquid")]
 use {
     crate::elements::{peg::PegoutValue, AssetSorting, IssuanceValue},
@@ -648,6 +648,16 @@ async fn run_server(
                             &Method::GET,
                             Some(_script_type @ &"scripthash"),
                             Some(&"hot"),
+                        )
+                        | (
+                            &Method::GET,
+                            Some(_script_type @ &"address"),
+                            Some(&"rollback-stats"),
+                        )
+                        | (
+                            &Method::GET,
+                            Some(_script_type @ &"scripthash"),
+                            Some(&"rollback-stats"),
                         ) => {
                             if let Some(manager_cors) = &config.manager_cors {
                                 if let Some(auth) = headers.get("Authorization") {
@@ -1045,6 +1055,34 @@ fn handle_request(
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
             query.add_hot_address(&script_hash[..]);
+            http_message(
+                StatusCode::OK,
+                "ok",
+                TTL_LONG,
+                config.sgx_enable,
+                config.sgx_test,
+            )
+        }
+        (
+            &Method::GET,
+            Some(script_type @ &"address"),
+            Some(script_str),
+            Some(&"rollback-stats"),
+            Some(height_str),
+            None,
+        )
+        | (
+            &Method::GET,
+            Some(script_type @ &"scripthash"),
+            Some(script_str),
+            Some(&"rollback-stats"),
+            Some(height_str),
+            None,
+        ) => {
+            let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
+            let rollback_to_height = u32::from_str(height_str)
+                .map_err(|_| HttpError::from(format!("Invalid block height {height_str}")))?;
+            query.rollback_stats(&script_hash[..], rollback_to_height);
             http_message(
                 StatusCode::OK,
                 "ok",

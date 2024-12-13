@@ -212,6 +212,10 @@ impl DB {
         self.db.get(key).unwrap().map(|v| if self.sgx_enable &&!self.skip_sgx_seal {unseal_data(v)}else { v.to_vec() })
     }
 
+    pub fn delete(&self, key: &[u8]) {
+        self.db.delete(key).unwrap()
+    }
+
     fn verify_compatibility(&self, config: &Config) {
         let mut compatibility_bytes = bincode_util::serialize_little(&DB_VERSION).unwrap();
 

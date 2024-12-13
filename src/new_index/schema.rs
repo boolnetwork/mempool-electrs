@@ -1223,6 +1223,22 @@ impl ChainQuery {
         info!("script: {} added to hot addresses", hash.to_hex());
     }
 
+    pub fn rollback_stats(&self, scripthash: &[u8], to_height: u32) {
+        let mut hot_addresses = self.store.hot_addresses.write().unwrap();
+        let to_del_keys = self.height_stats_history_iter_scan_reverse(scripthash)
+            .map(HeightStatsHistoryRow::from_row)
+            .filter(|r|r.key.confirmed_height > to_height)
+            .map(|r|r.key)
+            .collect::<Vec<_>>();
+        to_del_keys.iter().for_each(|key|{
+            self.store.stats_history_db.delete(&HeightStatsHistoryRow::key(&key.scripthash,key.confirmed_height))
+        });
+        self.store.stats_history_db.flush();
+        let hash = full_hash(scripthash);
+        hot_addresses.insert(hash,to_height);
+        info!("script: {} stats roll back to {}", hash.to_hex(), to_height);
+    }
+
     fn stats_delta(
         &self,
         scripthash: &[u8],
