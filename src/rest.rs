@@ -1177,7 +1177,7 @@ fn handle_request(
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
             let utxos: Vec<UtxoValue> = query
-                .utxo(&script_hash[..])?
+                .utxo(&script_hash[..], usize::MAX)?
                 .into_iter()
                 .map(UtxoValue::from)
                 .collect();
@@ -1205,7 +1205,7 @@ fn handle_request(
                 serde_json::from_slice(&body).map_err(|err| HttpError::from(err.to_string()))?;
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
             let mut utxos: Vec<UtxoValue> = query
-                .utxo(&script_hash[..])?
+                .utxo(&script_hash[..], usize::MAX)?
                 .into_iter()
                 .map(UtxoValue::from)
                 .collect();

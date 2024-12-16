@@ -100,10 +100,10 @@ impl Query {
         self.daemon.test_mempool_accept(txhex, maxfeerate)
     }
 
-    pub fn utxo(&self, scripthash: &[u8]) -> Result<Vec<Utxo>> {
+    pub fn utxo(&self, scripthash: &[u8], limit: usize) -> Result<Vec<Utxo>> {
         let mut utxos = self.chain.utxo(
             scripthash,
-            self.config.utxos_limit,
+            limit,
             super::db::DBFlush::Enable,
         )?;
         let mempool = self.mempool();
