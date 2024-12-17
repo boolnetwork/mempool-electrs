@@ -327,7 +327,7 @@ pub fn sgx_parse_aux_blocks(blob: Vec<u8>, magic: u32) -> Result<Vec<SizedBlock>
     }
 
     let data: Vec<SizedBlock> = slices
-        .into_par_iter()
+        .into_iter()
         .map(|(slice, size)| {
             (
                 parse_aux_block(slice.to_vec()).expect("failed to parse Block"),

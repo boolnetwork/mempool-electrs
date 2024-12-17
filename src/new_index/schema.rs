@@ -448,8 +448,7 @@ impl Indexer {
         // TODO: skip orphaned blocks?
         let rows = {
             let _timer = self.start_timer("add_process");
-            // sgx_add_blocks(Arc::new(blocks.to_vec()), Arc::new(self.iconfig.clone()))
-            add_blocks(blocks, &self.iconfig)
+            sgx_add_blocks(blocks, &self.iconfig)
         };
         {
             let _timer = self.start_timer("add_write");
@@ -1557,6 +1556,38 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
         .collect()
 }
 
+fn sgx_add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRow> {
+    // persist individual transactions:
+    //      T{txid} → {rawtx}
+    //      C{txid}{blockhash}{height} →
+    //      O{txid}{index} → {txout}
+    // persist block headers', block txids' and metadata rows:
+    //      B{blockhash} → {header}
+    //      X{blockhash} → {txid1}...{txidN}
+    //      M{blockhash} → {tx_count}{size}{weight}
+    block_entries
+        .iter() // serialization is CPU-intensive
+        .map(|b| {
+            let mut rows = vec![];
+            let blockhash = full_hash(&b.entry.hash()[..]);
+            let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
+            for tx in &b.block.txdata {
+                add_transaction(tx, blockhash, &mut rows, iconfig);
+            }
+
+            if !iconfig.light_mode {
+                rows.push(BlockRow::new_txids(blockhash, &txids).into_row());
+                rows.push(BlockRow::new_meta(blockhash, &BlockMeta::from(b)).into_row());
+            }
+
+            rows.push(BlockRow::new_header(b).into_row());
+            rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
+            rows
+        })
+        .flatten()
+        .collect()
+}
+
 fn add_transaction(
     tx: &Transaction,
     blockhash: FullHash,
@@ -1635,7 +1666,7 @@ fn sgx_lookup_txos(
     allow_missing: bool,
 ) -> HashMap<OutPoint, TxOut> {
     outpoints
-        .par_iter()
+        .iter()
         .filter_map(|outpoint| {
             lookup_txo(txstore_db, outpoint)
                 .or_else(|| {
