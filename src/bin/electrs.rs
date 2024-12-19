@@ -81,14 +81,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                             store.reload_store();
                         }
                         _ => {
-                            if err
-                                .to_string()
-                                .contains("failed to get blocks from bitcoind")
-                            {
-                                error!("{err}");
-                            } else {
-                                return Err(err);
-                            }
+                            error!("{err}");
                         }
                     }
                 }
@@ -234,14 +227,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                                 store.reload_store();
                             }
                             _ => {
-                                if err
-                                    .to_string()
-                                    .contains("failed to get blocks from bitcoind")
-                                {
-                                    error!("{err}");
-                                } else {
-                                    return Err(err);
-                                }
+                                error!("{err}");
                             }
                         }
                     }
