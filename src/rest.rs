@@ -747,6 +747,19 @@ fn handle_request(
         path.get(3),
         path.get(4),
     ) {
+        (&Method::GET, Some(&"store"), Some(&"tip"), None, None, None) => {
+            match query.chain().stored_tip() {
+                None => Err(HttpError::not_found("Stored tip not found".to_string())),
+                Some(tip) => http_message(
+                    StatusCode::OK,
+                    tip.to_hex(),
+                    TTL_SHORT,
+                    config.sgx_enable,
+                    config.sgx_test,
+                )
+            }
+        },
+
         (&Method::GET, Some(&"blocks"), Some(&"tip"), Some(&"hash"), None, None) => http_message(
             StatusCode::OK,
             query.chain().best_hash().to_hex(),

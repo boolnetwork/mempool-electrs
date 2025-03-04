@@ -1355,6 +1355,14 @@ impl ChainQuery {
         *self.store.indexed_headers.read().unwrap().tip()
     }
 
+    pub fn stored_tip(&self) -> Option<BlockHash> {
+         self
+            .store
+            .txstore_db
+            .get(b"t")
+            .map(|tip_hash|deserialize(&tip_hash).expect("invalid chain tip in `t`"))
+    }
+
     pub fn best_header(&self) -> HeaderEntry {
         let headers = self.store.indexed_headers.read().unwrap();
         headers
