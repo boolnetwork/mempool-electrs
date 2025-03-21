@@ -213,43 +213,53 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         }
 
         // Index new blocks
-        let current_tip = daemon.getbestblockhash()?;
-        if current_tip != tip {
-            if config.sgx_enable {
-                match indexer.sgx_update(&daemon) {
-                    Ok(_block_hash) => {
+        match daemon.getbestblockhash() {
+            Ok(current_tip) => {
+                if current_tip != tip {
+                    if config.sgx_enable {
+                        match indexer.sgx_update(&daemon) {
+                            Ok(_block_hash) => {
+                                tip = current_tip;
+                            }
+                            Err(err) => {
+                                match err {
+                                    Error(ErrorKind::UpdateError(msg), _) => {
+                                        error!("{}", msg);
+                                        store.reload_store();
+                                    }
+                                    _ => {
+                                        error!("{err}");
+                                    }
+                                }
+                            }
+                        }
+                    }else {
+                        match indexer.update(&daemon) {
+                            Ok(_hash) => {},
+                            Err(err) => {
+                                match err {
+                                    Error(ErrorKind::UpdateError(msg), _) => {
+                                        error!("{}", msg);
+                                        store.reload_store();
+                                    }
+                                    _ => {
+                                        return Err(err)
+                                    }
+                                }
+                            }
+                        };
                         tip = current_tip;
                     }
-                    Err(err) => {
-                        match err {
-                            Error(ErrorKind::UpdateError(msg), _) => {
-                                error!("{}", msg);
-                                store.reload_store();
-                            }
-                            _ => {
-                                error!("{err}");
-                            }
-                        }
-                    }
-                }
-            }else {
-                match indexer.update(&daemon) {
-                    Ok(_hash) => {},
-                    Err(err) => {
-                        match err {
-                            Error(ErrorKind::UpdateError(msg), _) => {
-                                error!("{}", msg);
-                                store.reload_store();
-                            }
-                            _ => {
-                                return Err(err)
-                            }
-                        }
-                    }
                 };
-                tip = current_tip;
             }
-        };
+            Err(err) => {
+                error!(
+                    "Error getting block hash from daemon, skipping: {}",
+                    err.display_chain()
+                )
+            }
+        }
+
 
         // Update mempool
         if let Err(e) = Mempool::update(&mempool, &daemon) {
