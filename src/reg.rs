@@ -135,10 +135,10 @@ pub fn add_blocks_bitcoind(
             match match daemon.network() {
                 Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => daemon
                     .get_blocks_has_aux(&blockhashes)
-                    .map_err(|_| format!("failed to get blocks from bitcoind {:?}", blockhashes)),
+                    .map_err(|e| format!("failed to get blocks from bitcoind {:?}: {e}", blockhashes)),
                 _ => daemon
                     .getblocks(&blockhashes)
-                    .map_err(|_| format!("failed to get blocks from bitcoind {:?}", blockhashes)),
+                    .map_err(|e| format!("failed to get blocks from bitcoind {:?}: {e}", blockhashes)),
             } {
                 Ok(data) => {
                     blocks.replace(data);

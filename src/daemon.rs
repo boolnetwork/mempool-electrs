@@ -27,15 +27,15 @@ use elements::encode::{deserialize, serialize};
 use crate::errors::*;
 
 fn parse_hash<T>(value: &Value) -> Result<T>
-    where
-        T: FromHex,
+where
+    T: FromHex,
 {
     T::from_hex(
         value
             .as_str()
             .chain_err(|| format!("non-string value: {}", value))?,
     )
-        .chain_err(|| format!("non-hex value: {}", value))
+    .chain_err(|| format!("non-hex value: {}", value))
 }
 
 fn header_from_value(value: Value) -> Result<BlockHeader> {
@@ -519,7 +519,8 @@ impl Daemon {
         for chunk in &chunks {
             let reqs = chunk.collect();
             let mut replies = if spv {
-                self.send_req(&reqs).map_err(|e| ErrorKind::SgxError(e.to_string()))?
+                self.send_req(&reqs)
+                    .map_err(|e| ErrorKind::SgxError(e.to_string()))?
             } else {
                 self.call_jsonrpc(method, &reqs)?
             };
@@ -625,7 +626,7 @@ impl Daemon {
     pub fn getblockheader(&self, blockhash: &BlockHash) -> Result<BlockHeader> {
         #[cfg(not(feature = "liquid"))]
         match self.network {
-            Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest=> {
+            Fractal | FractalTestnet | Dogecoin | DogecoinTestnet | DogecoinRegtest => {
                 header_from_value_aux(self.request(
                     "getblockheader",
                     json!([blockhash.to_hex(), /*verbose=*/ false]),
@@ -697,6 +698,9 @@ impl Daemon {
             | Network::Regtest
             | Network::Signet => {
                 for value in values {
+                    if value.is_null() {
+                        return Err("empty block".into());
+                    }
                     blocks.push(block_from_value(value)?);
                 }
             }
@@ -715,6 +719,9 @@ impl Daemon {
         let block_values = self.requests("getblock", &params_list)?;
         let mut blocks = vec![];
         for value in block_values {
+            if value.is_null() {
+                return Err("empty block".into());
+            }
             blocks.push(aux_block_from_value(value)?);
         }
         Ok(blocks)
@@ -888,7 +895,7 @@ impl Daemon {
 #[cfg(test)]
 mod test {
     use crate::config::StaticCookie;
-    use crate::daemon::{block_from_value, parse_jsonrpc_reply, Connection, header_from_value_aux};
+    use crate::daemon::{block_from_value, header_from_value_aux, parse_jsonrpc_reply, Connection};
     use crate::signal::Waiter;
     use bitcoin::hashes::hex::ToHex;
     use bitcoin::{Address, BlockHash, Network, ScriptHash};
@@ -916,7 +923,7 @@ mod test {
             signal,
             false,
         )
-            .unwrap();
+        .unwrap();
         conn
     }
 
@@ -990,8 +997,9 @@ mod test {
 
         let block_hash = json!("178ff10d5a401e4cb7db773ad58df50b7d1f469e4f9873400cf4855d18c907bb");
         let mut conn = new_conn();
-        let req = json!({"method": "getblockheader", "params": json!([block_hash, false]), "id": 1})
-            .to_string();
+        let req =
+            json!({"method": "getblockheader", "params": json!([block_hash, false]), "id": 1})
+                .to_string();
         conn.send(&req).unwrap();
         let response = conn.recv().unwrap();
         let mut response_value: Value = from_str(&response).unwrap();
